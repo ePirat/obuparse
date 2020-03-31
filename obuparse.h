@@ -229,6 +229,41 @@ typedef struct OBPSequenceHeader {
 } OBPSequenceHeader;
 
 /*
+ * Film Grain Parameers.
+ */
+typedef struct OBPFilmGrainParameters {
+    int apply_grain;
+    uint16_t grain_seed;
+    int update_grain;
+    uint8_t film_grain_params_ref_idx;
+    uint8_t num_y_points;
+    uint8_t point_y_value[16];
+    uint8_t point_y_scaling[16];
+    int chroma_scaling_from_luma;
+    uint8_t num_cb_points;
+    uint8_t point_cb_value[16];
+    uint8_t point_cb_scaling[16];
+    uint8_t num_cr_points;
+    uint8_t point_cr_value[16];
+    uint8_t point_cr_scaling[16];
+    uint8_t grain_scaling_minus_8;
+    uint8_t ar_coeff_lag;
+    uint8_t ar_coeffs_y_plus_128[24];
+    uint8_t ar_coeffs_cb_plus_128[25];
+    uint8_t ar_coeffs_cr_plus_128[25];
+    uint8_t ar_coeff_shift_minus_6;
+    uint8_t grain_scale_shift;
+    uint8_t cb_mult;
+    uint8_t cb_luma_mult;
+    uint16_t cb_offset;
+    uint8_t cr_mult;
+    uint8_t cr_luma_mult;
+    uint16_t cr_offset;
+    int overlap_flag;
+    int clip_to_restricted_range;
+} OBPFilmGrainParameters;
+
+/*
  * Frame Header OBU
  */
 typedef struct OBPFrameHeader {
@@ -271,10 +306,10 @@ typedef struct OBPFrameHeader {
     uint8_t gold_frame_idx;
     uint8_t ref_frame_idx[7];
     uint8_t delta_frame_id_minus_1[7];
-    int found_ref[8];
+    int found_ref;
     int allow_high_precision_mv;
     struct {
-        int is_filter_switchale;
+        int is_filter_switchable;
         uint8_t interpolation_filter;
     } interpolation_filter;
     int is_motion_mode_switchable;
@@ -344,37 +379,7 @@ typedef struct OBPFrameHeader {
         int32_t gm_params[8][6];
         uint32_t prev_gm_params[8][6];
     } global_motion_params;
-    struct {
-        int apply_grain;
-        uint16_t grain_seed;
-        int update_grain;
-        uint8_t film_grain_params_ref_idx;
-        uint8_t num_y_points;
-        uint8_t point_y_value[16];
-        uint8_t point_y_scaling[16];
-        int chroma_scaling_from_luma;
-        uint8_t num_cb_points;
-        uint8_t point_cb_value[16];
-        uint8_t point_cb_scaling[16];
-        uint8_t num_cr_points;
-        uint8_t point_cr_value[16];
-        uint8_t point_cr_scaling[16];
-        uint8_t grain_scaling_minus_8;
-        uint8_t ar_coeff_lag;
-        uint8_t ar_coeffs_y_plus_128[24];
-        uint8_t ar_coeffs_cb_plus_128[25];
-        uint8_t ar_coeffs_cr_plus_128[25];
-        uint8_t ar_coeff_shift_minus_6;
-        uint8_t grain_scale_shift;
-        uint8_t cb_mult;
-        uint8_t cb_luma_mult;
-        uint16_t cb_offset;
-        uint8_t cr_mult;
-        uint8_t cr_luma_mult;
-        uint16_t cr_offset;
-        int overlap_flag;
-        int clip_to_restricted_range;
-    } film_grain_params;
+    OBPFilmGrainParameters film_grain_parameters;
 } OBPFrameHeader;
 
 /*
@@ -470,6 +475,34 @@ typedef struct OBPError {
     size_t size;
 } OBPError;
 
+/***************************
+ * Private API Structures. *
+ ***************************/
+
+ /*
+  * Various bits of state required for parsing uncompressed_header(), such as reference
+  * management.
+  *
+  * Do not touch the values of these members. They are for internal obuparser use only.
+  */
+ typedef struct OBPState {
+     /* Redundant Frame Header things. */
+     OBPFrameHeader prev;
+     int prev_filled;
+
+     /* Frame state. */
+     OBPFrameType RefFrameType[8];
+     uint8_t RefValid[8];
+     uint8_t RefOrderHint[8];
+     uint8_t OrderHint[8];
+     uint8_t RefFrameId[8];
+     uint32_t RefUpscaledWidth[8];
+     uint32_t RefFrameHeight[8];
+     uint32_t RefRenderWidth[8];
+     uint32_t RefRenderHeight[8];
+     int32_t RefFrameSignBias[8];
+ } OBPState;
+
 /******************
  * API functions. *
  ******************/
@@ -513,6 +546,13 @@ int obp_get_next_obu(uint8_t *buf, size_t buf_size, OBPOBUType *obu_type, ptrdif
  *     0 on success, -1 on error.
  */
 int obp_parse_sequence_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq_header, OBPError *err);
+
+int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq_header, OBPState *state,
+                           int temporal_id, int spatial_id, OBPFrameHeader *frame_header, int *SeenFrameHeader, OBPError *err);
+
+int obp_parse_frame(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq_header, OBPState *state,
+                    int temporal_id, int spatial_id, OBPFrameHeader *frame_header, void *tile_group,
+                    int *SeenFrameHeader, OBPError *err);
 
 /*
  * obp_parse_metadata parses a metadata OBU and fills out the fields in a user-provided OBPMetadata

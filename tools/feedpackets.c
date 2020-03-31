@@ -60,12 +60,17 @@ int main(int argc, char *argv[])
         goto end;
     }
 
-    while (!feof(ivf))
+//    while (!feof(ivf))
+    do
     {
         uint8_t frame_header[12];
         uint8_t *packet_buf;
         size_t packet_size;
         size_t packet_pos = 0;
+        OBPSequenceHeader hdr = {0};
+        OBPState state = {0};
+        int seen_seq = 0;
+        int SeenFrameHeader = 0;
 
         size_t read_in = fread(&frame_header[0], 1, 12, ivf);
         if (read_in != 12) {
@@ -121,8 +126,13 @@ int main(int argc, char *argv[])
                    obu_type, offset, obu_size, temporal_id, spatial_id);
 
             switch (obu_type) {
+            case OBP_OBU_TEMPORAL_DELIMITER: {
+                assert(obu_size == 0);
+                SeenFrameHeader = 0;
+                break;
+            }
             case OBP_OBU_SEQUENCE_HEADER: {
-                OBPSequenceHeader hdr = {0};
+                seen_seq = 1;
                 ret = obp_parse_sequence_header(packet_buf + packet_pos + offset, obu_size, &hdr, &err);
                 if (ret < 0) {
                     free(packet_buf);
@@ -134,6 +144,42 @@ int main(int argc, char *argv[])
                 printf("bitdepth = %d primaries = %d transfer = %d matrix = %d\n", hdr.color_config.BitDepth,
                        hdr.color_config.color_primaries, hdr.color_config.transfer_characteristics,
                        hdr.color_config.matrix_coefficients);
+                break;
+            }
+            case OBP_OBU_FRAME: {
+                OBPFrameHeader frame_hdr = {0};
+                if (!seen_seq) {
+                    free(packet_buf);
+                    printf("Encountered Frame Header OBU before Sequence Header OBU.\n");
+                    ret = 1;
+                    goto end;
+                }
+                ret = obp_parse_frame(packet_buf + packet_pos + offset, obu_size, &hdr, &state, temporal_id, spatial_id, &frame_hdr, NULL, &SeenFrameHeader, &err);
+                if (ret < 0) {
+                    free(packet_buf);
+                    printf("Failed to parse frame header: %s\n", err.error);
+                    ret = 1;
+                    goto end;
+                }
+                printf("rw=%"PRId32" rh=%"PRId32"\n", frame_hdr.RenderWidth, frame_hdr.RenderHeight);
+                break;
+            }
+            case OBP_OBU_REDUNDANT_FRAME_HEADER:
+            case OBP_OBU_FRAME_HEADER: {
+                OBPFrameHeader frame_hdr = {0};
+                if (!seen_seq) {
+                    free(packet_buf);
+                    printf("Encountered Frame Header OBU before Sequence Header OBU.\n");
+                    ret = 1;
+                    goto end;
+                }
+                ret = obp_parse_frame_header(packet_buf + packet_pos + offset, obu_size, &hdr, &state, temporal_id, spatial_id, &frame_hdr, &SeenFrameHeader, &err);
+                if (ret < 0) {
+                    free(packet_buf);
+                    printf("Failed to parse frame header: %s\n", err.error);
+                    ret = 1;
+                    goto end;
+                }
                 break;
             }
             case OBP_OBU_TILE_LIST: {
@@ -174,7 +220,7 @@ int main(int argc, char *argv[])
             ret = 1;
             goto end;
         }
-    }
+    } while(0);
 
 end:
     fclose(ivf);

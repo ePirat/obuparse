@@ -143,6 +143,20 @@ static inline int _obp_uvlc(_OBPBitReader *br, uint32_t *value, OBPError *err)
     return 0;
 }
 
+static inline int32_t _obp_get_relative_dist(int32_t a, int32_t b, OBPSequenceHeader *seq)
+{
+    int32_t diff, m;
+
+    if (!seq->enable_order_hint)
+        return 0;
+
+    diff = a - b;
+    m    = 1 << (seq->OrderHintBits - 1);
+    diff = (diff & (m - 1)) - (diff & m);
+
+    return diff;
+}
+
 /*****************************
  * API functions start here. *
  *****************************/
@@ -568,5 +582,415 @@ int obp_parse_metadata(uint8_t *buf, size_t buf_size, OBPMetadata *metadata, OBP
         return -1;
     }
 
+    return 0;
+}
+
+int obp_parse_frame(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq, OBPState *state,
+                    int temporal_id, int spatial_id, OBPFrameHeader *fh, void *tile_group,
+                    int *SeenFrameHeader, OBPError *err)
+{
+    // TODO: Define OBPTileGroup and pals
+    // pos = 0;
+    return obp_parse_frame_header(buf, buf_size, seq, state, temporal_id, spatial_id, fh, SeenFrameHeader, err);
+    // pos = consumed
+    // parse_tile_group(buf_pos,size-pos)
+}
+
+int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq, OBPState *state,
+                           int temporal_id, int spatial_id, OBPFrameHeader *fh, int *SeenFrameHeader, OBPError *err)
+{
+    _OBPBitReader b   = _obp_new_br(buf, buf_size);
+    _OBPBitReader *br = &b;
+
+    if (*SeenFrameHeader == 1) {
+        if (!state->prev_filled) {
+            snprintf(err->error, err->size, "SeenFrameHeader is one, but no previous header exists in state.");
+            return -1;
+        }
+        *fh = state->prev;
+        return 0;
+    }
+
+    *SeenFrameHeader = 1;
+
+    /* uncompressed_heade() */
+    int idLen = 0; /* only set to 0 to shut up a compiler warning. */
+    if (seq->frame_id_numbers_present_flag) {
+        idLen = seq->additional_frame_id_length_minus_1 + seq->delta_frame_id_length_minus_2 + 3;
+    }
+    uint8_t allFrames = 255; /* (1 << 8) - 1 */
+    int FrameIsIntra;
+    if (seq->reduced_still_picture_header) {
+        fh->show_existing_frame = 0;
+        fh->frame_type          = OBP_KEY_FRAME;
+        FrameIsIntra            = 1;
+        fh->show_frame          = 1;
+        fh->showable_frame      = 1;
+    } else {
+        _obp_br(fh->show_existing_frame, br, 1);
+        if (fh->show_existing_frame) {
+            _obp_br(fh->frame_to_show_map_idx, br, 3);
+            if (seq->decoder_model_info_present_flag && !seq->timing_info.equal_picture_interval) {
+                /* temporal_point_info() */
+                uint8_t n = seq->decoder_model_info.frame_presentation_time_length_minus_1 + 1;
+                _obp_br(fh->temporal_point_info.frame_presentation_time, br, n);
+            }
+            fh->refresh_frame_flags = 0;
+            if (seq->frame_id_numbers_present_flag) {
+                assert(idLen <= 255);
+                _obp_br(fh->display_frame_id, br, (uint8_t) idLen);
+            }
+            fh->frame_type = state->RefFrameType[fh->frame_to_show_map_idx];
+            if (fh->frame_type == OBP_KEY_FRAME) {
+                fh->refresh_frame_flags = allFrames;
+            }
+            if (seq->film_grain_params_present) {
+                /* TODO: load_grain_params(frame_to_show_map_idx) */
+                assert(0);
+            }
+            return 0;
+        }
+        _obp_br(fh->frame_type, br, 2);
+        FrameIsIntra = (fh->frame_type == OBP_INTRA_ONLY_FRAME || fh->frame_type == OBP_KEY_FRAME);
+        _obp_br(fh->show_frame, br, 1);
+        if (fh->show_frame && seq->decoder_model_info_present_flag && !seq->timing_info.equal_picture_interval){
+            /* temporal_point_info() */
+            uint8_t n = seq->decoder_model_info.frame_presentation_time_length_minus_1 + 1;
+            _obp_br(fh->temporal_point_info.frame_presentation_time, br, n);
+        }
+        if (fh->show_frame) {
+            fh->showable_frame = (fh->frame_type != OBP_KEY_FRAME);
+        } else {
+            _obp_br(fh->showable_frame, br, 1);
+        }
+        if (fh->frame_type == OBP_SWITCH_FRAME || (fh->frame_type == OBP_KEY_FRAME && fh->show_frame)) {
+            fh->error_resilient_mode = 1;
+        } else {
+            _obp_br(fh->error_resilient_mode, br, 1);
+        }
+    }
+    if (fh->frame_type == OBP_KEY_FRAME && fh->show_frame) {
+        for (int i = 0; i < 8; i++) {
+            state->RefValid[i]     = 0;
+            state->RefOrderHint[i] = 0;
+        }
+        for (int i = 0; i < 7; i++) {
+            state->OrderHint[1 + i] = 0;
+        }
+    }
+    _obp_br(fh->disable_cdf_update, br, 1);
+    if (seq->seq_force_screen_content_tools == 2) {
+        _obp_br(fh->allow_screen_content_tools, br, 1);
+    } else {
+        fh->allow_screen_content_tools = seq->seq_force_screen_content_tools;
+    }
+    if (fh->allow_screen_content_tools) {
+        if (seq->seq_force_integer_mv == 2) {
+            _obp_br(fh->force_integer_mv, br, 1);
+        } else {
+            fh->force_integer_mv = seq->seq_force_integer_mv;
+        }
+    } else {
+        fh->force_integer_mv = 0;
+    }
+    if (FrameIsIntra) {
+         fh->force_integer_mv = 1;
+    }
+    if (seq->frame_id_numbers_present_flag) {
+        /*PrevFrameID = current_frame_id */
+        assert(idLen <= 255);
+        _obp_br(fh->current_frame_id, br, idLen);
+        /* mark_ref_frames(idLen) */
+        uint8_t diffLen = seq->delta_frame_id_length_minus_2 + 2;
+        for (int i = 0; i < 8; i++) {
+            if (fh->current_frame_id > (((uint32_t)1) << diffLen)) {
+                if (state->RefFrameId[i] > fh->current_frame_id || state->RefFrameId[i] < (fh->current_frame_id - (1 << diffLen))) {
+                    state->RefValid[i] = 0;
+                }
+            } else {
+                if (state->RefFrameId[i] > fh->current_frame_id && state->RefFrameId[i] < ((1 << idLen) + fh->current_frame_id + (1 << diffLen))) {
+                    state->RefValid[i] = 0;
+                }
+            }
+        }
+    } else {
+        fh->current_frame_id = 0;
+    }
+    if (fh->frame_type == OBP_SWITCH_FRAME) {
+        fh->frame_size_override_flag = 1;
+    } else if (seq->reduced_still_picture_header) {
+        fh->frame_size_override_flag = 1;
+    } else {
+        _obp_br(fh->frame_size_override_flag, br, 1);
+    }
+    if (seq->OrderHintBits) { /* Added by me. */
+        _obp_br(fh->order_hint, br, seq->OrderHintBits);
+    } else {
+        fh->order_hint = 0;
+    }
+    uint8_t OrderHint = fh->order_hint;
+    if (FrameIsIntra || fh->error_resilient_mode) {
+        fh->primary_ref_frame = 7;
+    } else {
+        _obp_br(fh->primary_ref_frame, br, 3);
+    }
+    if (seq->decoder_model_info_present_flag) {
+        _obp_br(fh->buffer_removal_time_present_flag, br, 1);
+        if (fh->buffer_removal_time_present_flag) {
+            for (uint8_t opNum = 0; opNum <= seq->operating_points_cnt_minus_1; opNum++) {
+                if (seq->decoder_model_present_for_this_op[opNum]) {
+                    uint8_t opPtIdc = seq->operating_point_idc[opNum];
+                    int inTemporalLayer = (opPtIdc >> temporal_id) & 1;
+                    int inSpatialLayer = (opPtIdc >> (spatial_id + 8)) & 1;
+                    if (opPtIdc == 0 || (inTemporalLayer && inSpatialLayer)) {
+                        uint8_t n = seq->decoder_model_info.buffer_removal_time_length_minus_1 + 1;
+                        _obp_br(fh->buffer_removal_time[opNum], br, n);
+                    }
+                }
+            }
+        }
+    }
+    fh->allow_high_precision_mv = 0;
+    fh->use_ref_frame_mvs = 0;
+    fh->allow_intrabc = 0;
+    if (fh->frame_type == OBP_SWITCH_FRAME || (fh->frame_type == OBP_KEY_FRAME && fh->show_frame)) {
+        fh->refresh_frame_flags = allFrames;
+    } else {
+        _obp_br(fh->refresh_frame_flags, br, 8);
+    }
+    if (!FrameIsIntra || fh->refresh_frame_flags != allFrames) {
+        if (fh->error_resilient_mode && seq->enable_order_hint) {
+            for (int i = 0; i < 8; i++) {
+                _obp_br(fh->ref_order_hint[i], br, seq->OrderHintBits);
+                if (fh->ref_order_hint[i] != state->RefOrderHint[i]) {
+                    state->RefValid[i] = 0;
+                }
+            }
+        }
+    }
+    uint32_t FrameWidth, FrameHeight;
+    uint32_t UpscaledWidth;
+    uint32_t MiCols, MiRows;
+    if (FrameIsIntra) {
+        /* frame_size() */
+        if (fh->frame_size_override_flag) {
+            uint8_t n = seq->frame_width_bits_minus_1 + 1;
+            _obp_br(fh->frame_width_minus_1, br, n);
+            n = seq->frame_height_bits_minus_1 + 1;
+            _obp_br(fh->frame_height_minus_1, br, n);
+            FrameWidth  = fh->frame_width_minus_1 + 1;
+            FrameHeight = fh->frame_height_minus_1 + 1;
+        } else {
+            FrameWidth  = seq->max_frame_width_minus_1 + 1;
+            FrameHeight = seq->max_frame_height_minus_1 + 1;
+        }
+        /* superres_params() */
+        uint32_t SuperresDenom;
+        if (seq->enable_superres) {
+            _obp_br(fh->superres_params.use_superres, br, 1);
+        } else {
+            fh->superres_params.use_superres = 0;
+        }
+        if (fh->superres_params.use_superres) {
+            _obp_br(fh->superres_params.coded_denom, br, 3);
+            SuperresDenom = fh->superres_params.coded_denom + 9;
+        } else {
+            SuperresDenom = 8;
+        }
+        UpscaledWidth = FrameWidth;
+        FrameWidth = (UpscaledWidth * 8 + (SuperresDenom / 2)) / SuperresDenom;
+        /* compute_image_size() */
+        MiCols = 2 * ((FrameWidth + 7) >> 3);
+        MiRows = 2 * ((FrameHeight + 7) >> 3);
+        /* render_size() */
+        _obp_br(fh->render_and_frame_size_different, br, 1);
+        if (fh->render_and_frame_size_different == 1) {
+            _obp_br(fh->render_width_minus_1, br, 16);
+            _obp_br(fh->render_height_minus_1, br, 16);
+            fh->RenderWidth  = fh->render_width_minus_1 + 1;
+            fh->RenderHeight = fh->render_height_minus_1 + 1;
+        } else {
+            fh->RenderWidth  = UpscaledWidth;
+            fh->RenderHeight = FrameHeight;
+        }
+        if (fh->allow_screen_content_tools && UpscaledWidth == FrameWidth) {
+            _obp_br(fh->allow_intrabc, br, 1);
+        }
+    } else {
+        if (!seq->enable_order_hint) {
+            fh->frame_refs_short_signaling = 0;
+        } else {
+            _obp_br(fh->frame_refs_short_signaling, br, 1);
+            if (fh->frame_refs_short_signaling) {
+                _obp_br(fh->last_frame_idx, br, 3);
+                _obp_br(fh->gold_frame_idx, br, 3);
+            }
+            /* TODO: set_frame_refs() */
+            assert(0);
+        }
+        for (int i = 0; i < 7; i++) {
+            if (!fh->frame_refs_short_signaling) {
+                _obp_br(fh->ref_frame_idx[i], br, 3);
+            }
+            if (seq->frame_id_numbers_present_flag) {
+                uint8_t n = seq->delta_frame_id_length_minus_2 + 2;
+                _obp_br(fh->delta_frame_id_minus_1[i], br, n);
+                uint8_t DeltaFrameId    = fh->delta_frame_id_minus_1[i] + 1;
+                uint8_t expectedFrameId = ((fh->current_frame_id + (1 << idLen) - DeltaFrameId) % (1 << idLen));
+                if (state->RefFrameId[fh->ref_frame_idx[i]] != expectedFrameId) {
+                    snprintf(err->error, err->size, "state->RefFrameId[fh->ref_frame_idx[i]] != expectedFrameId (%"PRIu8" vs %"PRIu8")",
+                             state->RefFrameId[fh->ref_frame_idx[i]], expectedFrameId);
+                    return -1;
+                }
+            }
+        }
+
+        if (!fh->frame_size_override_flag && !fh->error_resilient_mode) {
+            for (int i = 0; i < 7; i++) {
+                _obp_br(fh->found_ref, br, 1);
+                if (fh->found_ref == 1) {
+                    /* TODO: av1_decode_wrapup has https://aomediacodec.github.io/av1-spec/#set-frame-refs-process */
+                    UpscaledWidth    = state->RefUpscaledWidth[fh->ref_frame_idx[i]];
+                    FrameWidth       = UpscaledWidth;
+                    FrameHeight      = state->RefFrameHeight[fh->ref_frame_idx[i]];
+                    fh->RenderWidth  = state->RefRenderWidth[fh->ref_frame_idx[i]];
+                    fh->RenderHeight = state->RefRenderHeight[fh->ref_frame_idx[i]];
+                    break;
+                }
+            }
+            if (fh->found_ref) {
+                /* frame_size() */
+                if (fh->frame_size_override_flag) {
+                    uint8_t n = seq->frame_width_bits_minus_1 + 1;
+                    _obp_br(fh->frame_width_minus_1, br, n);
+                    n = seq->frame_height_bits_minus_1 + 1;
+                    _obp_br(fh->frame_height_minus_1, br, n);
+                    FrameWidth  = fh->frame_width_minus_1 + 1;
+                    FrameHeight = fh->frame_height_minus_1 + 1;
+                } else {
+                    FrameWidth  = seq->max_frame_width_minus_1 + 1;
+                    FrameHeight = seq->max_frame_height_minus_1 + 1;
+                }
+                /* superres_params() */
+                uint32_t SuperresDenom;
+                if (seq->enable_superres) {
+                    _obp_br(fh->superres_params.use_superres, br, 1);
+                } else {
+                    fh->superres_params.use_superres = 0;
+                }
+                if (fh->superres_params.use_superres) {
+                    _obp_br(fh->superres_params.coded_denom, br, 3);
+                    SuperresDenom = fh->superres_params.coded_denom + 9;
+                } else {
+                    SuperresDenom = 8;
+                }
+                UpscaledWidth = FrameWidth;
+                FrameWidth = (UpscaledWidth * 8 + (SuperresDenom / 2)) / SuperresDenom;
+                /* compute_image_size() */
+                MiCols = 2 * ((FrameWidth + 7) >> 3);
+                MiRows = 2 * ((FrameHeight + 7) >> 3);
+                /* render_size() */
+                _obp_br(fh->render_and_frame_size_different, br, 1);
+                if (fh->render_and_frame_size_different == 1) {
+                    _obp_br(fh->render_width_minus_1, br, 16);
+                    _obp_br(fh->render_height_minus_1, br, 16);
+                    fh->RenderWidth  = fh->render_width_minus_1 + 1;
+                    fh->RenderHeight = fh->render_height_minus_1 + 1;
+                } else {
+                    fh->RenderWidth  = UpscaledWidth;
+                    fh->RenderHeight = FrameHeight;
+                }
+            } else {
+                /* superres_params() */
+                uint32_t SuperresDenom;
+                if (seq->enable_superres) {
+                    _obp_br(fh->superres_params.use_superres, br, 1);
+                } else {
+                    fh->superres_params.use_superres = 0;
+                }
+                if (fh->superres_params.use_superres) {
+                    _obp_br(fh->superres_params.coded_denom, br, 3);
+                    SuperresDenom = fh->superres_params.coded_denom + 9;
+                } else {
+                    SuperresDenom = 8;
+                }
+                UpscaledWidth = FrameWidth;
+                FrameWidth = (UpscaledWidth * 8 + (SuperresDenom / 2)) / SuperresDenom;
+                /* compute_image_size() */
+                MiCols = 2 * ((FrameWidth + 7) >> 3);
+                MiRows = 2 * ((FrameHeight + 7) >> 3);
+            }
+        } else {
+        /* frame_size() */
+            if (fh->frame_size_override_flag) {
+                uint8_t n = seq->frame_width_bits_minus_1 + 1;
+                _obp_br(fh->frame_width_minus_1, br, n);
+                n = seq->frame_height_bits_minus_1 + 1;
+                _obp_br(fh->frame_height_minus_1, br, n);
+                FrameWidth  = fh->frame_width_minus_1 + 1;
+                FrameHeight = fh->frame_height_minus_1 + 1;
+            } else {
+                FrameWidth  = seq->max_frame_width_minus_1 + 1;
+                FrameHeight = seq->max_frame_height_minus_1 + 1;
+            }
+            /* superres_params() */
+            uint32_t SuperresDenom;
+            if (seq->enable_superres) {
+                _obp_br(fh->superres_params.use_superres, br, 1);
+            } else {
+                fh->superres_params.use_superres = 0;
+            }
+            if (fh->superres_params.use_superres) {
+                _obp_br(fh->superres_params.coded_denom, br, 3);
+                SuperresDenom = fh->superres_params.coded_denom + 9;
+            } else {
+                SuperresDenom = 8;
+            }
+            UpscaledWidth = FrameWidth;
+            FrameWidth = (UpscaledWidth * 8 + (SuperresDenom / 2)) / SuperresDenom;
+            /* compute_image_size() */
+            MiCols = 2 * ((FrameWidth + 7) >> 3);
+            MiRows = 2 * ((FrameHeight + 7) >> 3);
+            /* render_size() */
+            _obp_br(fh->render_and_frame_size_different, br, 1);
+            if (fh->render_and_frame_size_different == 1) {
+                _obp_br(fh->render_width_minus_1, br, 16);
+                _obp_br(fh->render_height_minus_1, br, 16);
+                fh->RenderWidth  = fh->render_width_minus_1 + 1;
+                fh->RenderHeight = fh->render_height_minus_1 + 1;
+            } else {
+                fh->RenderWidth  = UpscaledWidth;
+                fh->RenderHeight = FrameHeight;
+            }
+        }
+        if (fh->force_integer_mv) {
+            fh->allow_high_precision_mv = 0;
+        } else {
+            _obp_br(fh->allow_high_precision_mv, br, 1);
+        }
+        /* read_interpolation_filer() */
+        _obp_br(fh->interpolation_filter.is_filter_switchable, br, 1);
+        if (fh->interpolation_filter.is_filter_switchable) {
+            fh->interpolation_filter.interpolation_filter = 4;
+        } else {
+            _obp_br(fh->interpolation_filter.interpolation_filter, br, 2);
+        }
+        _obp_br(fh->is_motion_mode_switchable, br, 1);
+        if (fh->error_resilient_mode && !seq->enable_ref_frame_mvs) {
+            fh->use_ref_frame_mvs = 0;
+        } else {
+            _obp_br(fh->use_ref_frame_mvs, br, 1);
+        }
+        for (int i = 0; i < 7; i++) {
+            int refFrame = 1 + i;
+            uint8_t hint = state->RefOrderHint[fh->ref_frame_idx[i]];
+            state->OrderHint[refFrame] = hint;
+            if (!seq->enable_order_hint) {
+                state->RefFrameSignBias[refFrame] = 0;
+            } else {
+                state->RefFrameSignBias[refFrame] = _obp_get_relative_dist((int32_t) hint, (int32_t) OrderHint, seq);
+            }
+        }
+    }
     return 0;
 }
