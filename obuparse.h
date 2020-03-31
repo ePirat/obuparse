@@ -135,6 +135,16 @@ typedef enum {
     /* 3 Reserved */
 } OBPChromaSamplePosition;
 
+/*
+ * Frame types.
+ */
+typedef enum {
+    OBP_KEY_FRAME = 0,
+    OBP_INTER_FRAME = 1,
+    OBP_INTRA_ONLY_FRAME = 2,
+    OBP_SWITCH_FRAME = 3
+} OBPFrameType;
+
 /**************************************************
  * Various structures from the AV1 specification. *
  **************************************************/
@@ -217,6 +227,155 @@ typedef struct OBPSequenceHeader {
     } color_config;
     int film_grain_params_present;
 } OBPSequenceHeader;
+
+/*
+ * Frame Header OBU
+ */
+typedef struct OBPFrameHeader {
+    int show_existing_frame;
+    uint8_t frame_to_show_map_idx;
+    struct {
+        uint32_t frame_presentation_time;
+    } temporal_point_info;
+    uint32_t display_frame_id;
+    /* load_grain_params() unimplemented. */
+    OBPFrameType frame_type;
+    int show_frame;
+    int showable_frame;
+    int error_resilient_mode;
+    int disable_cdf_update;
+    int allow_screen_content_tools;
+    int force_integer_mv;
+    uint32_t current_frame_id;
+    int frame_size_override_flag;
+    uint8_t order_hint;
+    uint8_t primary_ref_frame;
+    int buffer_removal_time_present_flag;
+    uint32_t buffer_removal_time[32];
+    uint8_t refresh_frame_flags;
+    uint8_t ref_order_hint[8];
+    uint32_t frame_width_minus_1;
+    uint32_t frame_height_minus_1;
+    struct {
+        int use_superres;
+        uint8_t coded_denom;
+    } superres_params;
+    int render_and_frame_size_different;
+    uint16_t render_width_minus_1;
+    uint16_t render_height_minus_1;
+    uint32_t RenderWidth;
+    uint32_t RenderHeight;
+    int allow_intrabc;
+    int frame_refs_short_signaling;
+    uint8_t last_frame_idx;
+    uint8_t gold_frame_idx;
+    uint8_t ref_frame_idx[7];
+    uint8_t delta_frame_id_minus_1[7];
+    int found_ref[8];
+    int allow_high_precision_mv;
+    struct {
+        int is_filter_switchale;
+        uint8_t interpolation_filter;
+    } interpolation_filter;
+    int is_motion_mode_switchable;
+    int use_ref_frame_mvs;
+    int disable_frame_end_update_cdf;
+    struct {
+        int uniform_tile_spacing_flag;
+        uint16_t tileRows;
+        uint16_t tileCols;
+        uint32_t context_update_tile_id;
+        uint8_t tile_size_bytes_minus_1;
+    } tile_info;
+    struct {
+        uint8_t base_q_idx;
+        int diff_uv_delta;
+        int using_qmatrix;
+        uint8_t qm_y;
+        uint8_t qm_u;
+        uint8_t qm_v;
+    } quantization_params;
+    struct {
+        int segmentation_enabled;
+        int segmentation_update_map;
+        int segmentation_temporal_update;
+        int segmentation_update_data;
+    } segmentation_params;
+    struct {
+        int delta_q_present;
+        uint8_t delta_q_res;
+    } delta_q_params;
+    struct {
+        int delta_lf_present;
+        uint8_t delta_lf_res;
+        int delta_lf_multi;
+    } delta_lf_params;
+    struct {
+        uint8_t loop_filter_level[4];
+        uint8_t loop_filter_sharpness;
+        int loop_filter_delta_enabled;
+        int loop_filter_delta_update;
+        int update_ref_delta[8];
+        int8_t loop_filter_ref_deltas[8];
+        int update_mode_delta[8];
+        int8_t loop_filter_mode_deltas[8];
+    } loop_filter_params;
+    struct {
+        uint8_t cdef_damping_minus_3;
+        uint8_t cdef_bits;
+        uint8_t cdef_y_pri_strength[8];
+        uint8_t cdef_y_sec_strength[8];
+        uint8_t cdef_uv_pri_strength[8];
+        uint8_t cdef_uv_sec_strength[8];
+    } cdef_params;
+    struct {
+        uint8_t lr_type[3];
+        uint8_t lr_unit_shift;
+        uint8_t lr_unit_shift_extra;
+        int lr_uv_shift;
+    } lr_params;
+    int tx_mode_select;
+    int skip_mode_present;
+    int reference_select;
+    int allow_warped_motion;
+    int reduced_tx_set;
+    struct {
+        uint8_t gm_type[8];
+        int32_t gm_params[8][6];
+        uint32_t prev_gm_params[8][6];
+    } global_motion_params;
+    struct {
+        int apply_grain;
+        uint16_t grain_seed;
+        int update_grain;
+        uint8_t film_grain_params_ref_idx;
+        uint8_t num_y_points;
+        uint8_t point_y_value[16];
+        uint8_t point_y_scaling[16];
+        int chroma_scaling_from_luma;
+        uint8_t num_cb_points;
+        uint8_t point_cb_value[16];
+        uint8_t point_cb_scaling[16];
+        uint8_t num_cr_points;
+        uint8_t point_cr_value[16];
+        uint8_t point_cr_scaling[16];
+        uint8_t grain_scaling_minus_8;
+        uint8_t ar_coeff_lag;
+        uint8_t ar_coeffs_y_plus_128[24];
+        uint8_t ar_coeffs_cb_plus_128[25];
+        uint8_t ar_coeffs_cr_plus_128[25];
+        uint8_t ar_coeff_shift_minus_6;
+        uint8_t grain_scale_shift;
+        uint8_t cb_mult;
+        uint8_t cb_luma_mult;
+        uint16_t cb_offset;
+        uint8_t cr_mult;
+        uint8_t cr_luma_mult;
+        uint16_t cr_offset;
+        int overlap_flag;
+        int clip_to_restricted_range;
+    } film_grain_params;
+} OBPFrameHeader;
 
 /*
  * Tile List OBU
