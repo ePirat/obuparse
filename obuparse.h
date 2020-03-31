@@ -501,6 +501,7 @@ typedef struct OBPError {
      uint32_t RefRenderWidth[8];
      uint32_t RefRenderHeight[8];
      int32_t RefFrameSignBias[8];
+     uint8_t order_hint;
  } OBPState;
 
 /******************

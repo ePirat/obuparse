@@ -78,23 +78,6 @@ static inline uint64_t _obp_br_unchecked(_OBPBitReader *br, uint8_t n)
 } while(0)
 #endif
 
-/*********************
- * Helper functions. *
- *********************/
-
-static inline int _obp_is_valid_obu(OBPOBUType type)
-{
-    return type == OBP_OBU_SEQUENCE_HEADER ||
-           type == OBP_OBU_TEMPORAL_DELIMITER ||
-           type == OBP_OBU_FRAME_HEADER ||
-           type == OBP_OBU_TILE_GROUP ||
-           type == OBP_OBU_METADATA ||
-           type == OBP_OBU_FRAME ||
-           type == OBP_OBU_REDUNDANT_FRAME_HEADER ||
-           type == OBP_OBU_TILE_LIST ||
-           type == OBP_OBU_PADDING;
-}
-
 /************************************
  * Functions from AV1 spcification. *
  ************************************/
@@ -155,6 +138,133 @@ static inline int32_t _obp_get_relative_dist(int32_t a, int32_t b, OBPSequenceHe
     diff = (diff & (m - 1)) - (diff & m);
 
     return diff;
+}
+
+/*********************
+ * Helper functions. *
+ *********************/
+
+static inline int _obp_is_valid_obu(OBPOBUType type)
+{
+    return type == OBP_OBU_SEQUENCE_HEADER ||
+           type == OBP_OBU_TEMPORAL_DELIMITER ||
+           type == OBP_OBU_FRAME_HEADER ||
+           type == OBP_OBU_TILE_GROUP ||
+           type == OBP_OBU_METADATA ||
+           type == OBP_OBU_FRAME ||
+           type == OBP_OBU_REDUNDANT_FRAME_HEADER ||
+           type == OBP_OBU_TILE_LIST ||
+           type == OBP_OBU_PADDING;
+}
+
+static inline int _obp_set_frame_refs(OBPFrameHeader *fh, OBPSequenceHeader *seq, OBPState *state, OBPError *err)
+{
+    int usedFrame[8];
+    uint32_t curFrameHint, lastOrderHint, goldOrderHint, latestOrderHint, earliestOrderHint;
+    int32_t ref;
+    uint8_t shiftedOrderHints[8];
+    const int Ref_Frame_List[7 - 2] = { 2, 3, 5, 6, 7 }; /*LAST2_FRAME, LAST3_FRAME, BWDREF_FRAME, ALTREF2_FRAME, ALTREF_FRAME */
+    int32_t ref_frame_idx[8];
+
+    for (int i = 0; i < 7; i++) {
+        ref_frame_idx[i] = -1;
+    }
+    ref_frame_idx[1 - 1] = fh->last_frame_idx;
+    ref_frame_idx[4 - 1] = fh->gold_frame_idx;
+    for (int i = 0; i < 8; i++) {
+        usedFrame[i] = 0;
+    }
+    usedFrame[fh->last_frame_idx] = 1;
+    usedFrame[fh->gold_frame_idx] = 2;
+    curFrameHint                  = 1 << (seq->OrderHintBits - 1);
+    for (int i = 0; i < 8; i++) {
+        shiftedOrderHints[i] = curFrameHint + _obp_get_relative_dist(state->RefOrderHint[i], state->order_hint, seq); /*TODO: see wrapup */
+    }
+    lastOrderHint = shiftedOrderHints[fh->last_frame_idx];
+    goldOrderHint = shiftedOrderHints[fh->gold_frame_idx];
+    if (lastOrderHint >= curFrameHint || goldOrderHint >= curFrameHint) {
+        snprintf(err->error, err->size, "(lastOrderHint >= curFrameHint || goldOrderHint >= curFrameHint) not allowed.");
+        return -1;
+    }
+    /* find_latest_backward() */
+    ref             = -1;
+    latestOrderHint = 0;
+    for (int i = 0; i < 8; i++) {
+        uint32_t hint = shiftedOrderHints[i];
+        if (!usedFrame[i] && (hint >= curFrameHint) && (ref < 0 || hint >= latestOrderHint)) {
+            ref             = i;
+            latestOrderHint = hint;
+        }
+    }
+    if (ref >= 0) {
+        ref_frame_idx[7 - 1] = ref;
+        usedFrame[ref]       = 1;
+    }
+    /* find_earliest_backward() */
+    ref               = -1;
+    earliestOrderHint = 0;
+    for (int i = 0; i < 8; i++) {
+        uint32_t hint = shiftedOrderHints[i];
+        if (!usedFrame[i] && (hint >= curFrameHint) && (ref < 0 || hint < earliestOrderHint)) {
+            ref               = i;
+            earliestOrderHint = hint;
+        }
+    }
+    if (ref >= 0) {
+        ref_frame_idx[5 - 1] = ref;
+        usedFrame[ref]       = 1;
+    }
+    /* find_earliest_backward() */
+    ref               = -1;
+    earliestOrderHint = 0;
+    for (int i = 0; i < 8; i++) {
+        uint32_t hint = shiftedOrderHints[i];
+        if (!usedFrame[i] && (hint >= curFrameHint) && (ref < 0 || hint < earliestOrderHint)) {
+            ref               = i;
+            earliestOrderHint = hint;
+        }
+    }
+    if (ref >= 0) {
+        ref_frame_idx[6 - 1] = ref;
+        usedFrame[ref]       = 1;
+    }
+    for (int i = 0; i < 7 - 2; i++) {
+        uint8_t refFrame = Ref_Frame_List[i];
+        if (ref_frame_idx[refFrame - 1] < 0) {
+            int32_t subref              = -1;
+            uint32_t subLatestOrderHint = 0;
+            for (int i = 0; i < 8; i++) {
+                uint32_t hint = shiftedOrderHints[i];
+                if (!usedFrame[i] && (hint < curFrameHint) && (ref < 0 || hint >= subLatestOrderHint)) {
+                    ref                = i;
+                    subLatestOrderHint = 0;
+                }
+            }
+            ref = subref;
+            if (ref >= 0) {
+                ref_frame_idx[refFrame - 1] = ref;
+                usedFrame[ref]              = 1;
+            }
+        }
+    }
+    ref = -1;
+    for (int i = 0; i < 8; i++) {
+        uint32_t hint = shiftedOrderHints[i];
+        if (ref < 0 || hint < earliestOrderHint) {
+            ref = i;
+            earliestOrderHint = hint;
+        }
+    }
+    for (int i = 0; i < 7; i++) {
+        if (ref_frame_idx[i] < 0) {
+            ref_frame_idx[i] = ref;
+        }
+    }
+    for (int i = 0; i < 7; i++) {
+        fh->ref_frame_idx[i] = ref_frame_idx[i];
+    }
+
+    return 0;
 }
 
 /*****************************
@@ -820,13 +930,19 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
         if (!seq->enable_order_hint) {
             fh->frame_refs_short_signaling = 0;
         } else {
+            int ret;
+            char err_buf[1024];
+            OBPError error = { &err_buf[0], 1024 };
             _obp_br(fh->frame_refs_short_signaling, br, 1);
             if (fh->frame_refs_short_signaling) {
                 _obp_br(fh->last_frame_idx, br, 3);
                 _obp_br(fh->gold_frame_idx, br, 3);
             }
-            /* TODO: set_frame_refs() */
-            assert(0);
+            ret = _obp_set_frame_refs(fh, seq, state, &error);
+            if (ret < 0) {
+                snprintf(err->error, err->size, "Failed to set frame refs: %s", error.error);
+                return -1;
+            }
         }
         for (int i = 0; i < 7; i++) {
             if (!fh->frame_refs_short_signaling) {
