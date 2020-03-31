@@ -140,9 +140,20 @@ static inline int32_t _obp_get_relative_dist(int32_t a, int32_t b, OBPSequenceHe
     return diff;
 }
 
+static inline uint32_t _obp_tile_log2(uint32_t blkSize, uint32_t target)
+{
+    uint32_t k;
+    for (k = 0; (blkSize << k) < target; k++) {
+    }
+    return k;
+}
+
 /*********************
  * Helper functions. *
  *********************/
+
+#define _OBP_MAX(x,y) ((x) > (y) ? x : y)
+#define _OBP_MIN(x,y) ((x) < (y) ? x : y)
 
 static inline int _obp_is_valid_obu(OBPOBUType type)
 {
@@ -878,7 +889,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             }
         }
     }
-    uint32_t FrameWidth, FrameHeight;
+    uint32_t FrameWidth = 0, FrameHeight = 0;
     uint32_t UpscaledWidth;
     uint32_t MiCols, MiRows;
     if (FrameIsIntra) {
@@ -1108,5 +1119,105 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             }
         }
     }
+    if (seq->reduced_still_picture_header || fh->disable_cdf_update) {
+        fh->disable_frame_end_update_cdf = 1;
+    } else {
+        _obp_br(fh->disable_frame_end_update_cdf, br, 1);
+    }
+    if (fh->primary_ref_frame == 7) {
+        /* init_non_coeff_cdfs() not relevant to OBU parsing. */
+        /* setup_past_independence() */
+        for (int i = 1; i < 7; i++) {
+            fh->global_motion_params.gm_type[i] = 0;
+            for (int j = 0; j < 6; j++) {
+                fh->global_motion_params.gm_params[i][j] = (i % 3 == 2) ? (((uint32_t)1) << 16) : 0;
+            }
+        }
+        fh->loop_filter_params.loop_filter_delta_enabled = 1;
+        fh->loop_filter_params.loop_filter_ref_deltas[0] = 1;
+        fh->loop_filter_params.loop_filter_ref_deltas[1] = 0;
+        fh->loop_filter_params.loop_filter_ref_deltas[2] = 0;
+        fh->loop_filter_params.loop_filter_ref_deltas[3] = 0;
+        fh->loop_filter_params.loop_filter_ref_deltas[4] = 0;
+        fh->loop_filter_params.loop_filter_ref_deltas[5] = -1;
+        fh->loop_filter_params.loop_filter_ref_deltas[6] = -1;
+        fh->loop_filter_params.loop_filter_ref_deltas[7] = -1;
+        for (int i = 0; i < 2; i++) {
+            fh->loop_filter_params.loop_filter_mode_deltas[i] = 0;
+        }
+    } else {
+        /* load_cdfs() not relevant to OBU parsing. */
+        /* load_preivous */
+        /* skipping prevFrame */
+        for (int i = 0; i > 8; i++) {
+            for (int j = 0; j < 6; j++) {
+                fh->global_motion_params.prev_gm_params[i][j] = state->SavedGmParams[i][j];
+            }
+        }
+        /* TODO: load_loop_filter_params() */
+        /* TODO: load_segmentation_params() */
+    }
+    /* Not relevant to OBU parsing:
+           if (fh->use_ref_frame_mvs) {
+               motion_field_estimation()
+           }
+     */
+    /* tile_info() */
+    uint32_t sbCols          = seq->use_128x128_superblock ? ((MiCols + 31) >> 5) : ((MiCols + 15) >> 4);
+    uint32_t sbRows          = seq->use_128x128_superblock ? ((MiRows + 31) >> 5) : ((MiRows + 15) >> 4);
+    uint32_t sbShift         = seq->use_128x128_superblock ? 5 : 4;
+    uint32_t sbSize          = sbShift + 2;
+    uint32_t maxTileWidthSb  = 4096 >> sbSize;
+    uint32_t maxTileAreaSb   = (4096 * 2304) >> (2 * sbSize);
+    uint32_t minLog2TileCols = _obp_tile_log2(maxTileWidthSb, sbCols);
+    uint32_t maxLog2TileCols = _obp_tile_log2(1, _OBP_MIN(sbCols, 64));
+    uint32_t maxLog2TileRows = _obp_tile_log2(1, _OBP_MIN(sbRows, 64));
+    uint32_t minLog2Tiles    = _OBP_MAX(minLog2TileCols, _obp_tile_log2(maxTileAreaSb, sbRows * sbCols));
+    uint32_t minLog2TileRows, TileColsLog2, TileRowsLog2;
+    uint32_t MiColStarts[64], MiRowStarts[64];
+    _obp_br(fh->tile_info.uniform_tile_spacing_flag, br, 1);
+    if (fh->tile_info.uniform_tile_spacing_flag) {
+        TileColsLog2 = minLog2TileCols;
+        while (TileColsLog2 < maxLog2TileCols) {
+            int increment_tile_cols_log2;
+            _obp_br(increment_tile_cols_log2, br, 1);
+            if (increment_tile_cols_log2 == 1) {
+                TileColsLog2++;
+            } else {
+                break;
+            }
+        }
+        uint32_t tileWidthSb = (sbCols + (1 << TileColsLog2) - 1) >> TileColsLog2;
+        int i = 0;
+        for (uint32_t startSb = 0; startSb < sbCols; startSb += tileWidthSb) {
+            MiColStarts[i] = startSb << sbShift;
+            i += 1;
+        }
+        MiColStarts[i]           = MiCols;
+        fh->tile_info.TileCols   = i;
+
+        minLog2TileRows = _OBP_MAX((int64_t)minLog2Tiles - (int64_t)TileColsLog2, 0);
+        TileRowsLog2 = minLog2TileRows;
+        while (TileRowsLog2 < maxLog2TileRows) {
+            int increment_tile_rows_log2;
+            _obp_br(increment_tile_rows_log2, br, 1);
+            if (increment_tile_rows_log2 == 1) {
+                TileRowsLog2++;
+            } else {
+                break;
+            }
+        }
+        uint32_t tileHeightSb = (sbRows + (1 << TileRowsLog2) - 1) >> TileRowsLog2;
+        i = 0;
+        for (uint32_t startSb = 0; startSb < sbRows; startSb += tileHeightSb) {
+            MiRowStarts[i] = startSb << sbShift;
+            i += 1;
+        }
+        MiRowStarts[i]           = MiRows;
+        fh->tile_info.TileRows   = i;
+    } else {
+        assert(0);
+    }
+
     return 0;
 }

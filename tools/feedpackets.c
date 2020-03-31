@@ -162,6 +162,7 @@ int main(int argc, char *argv[])
                     goto end;
                 }
                 printf("rw=%"PRId32" rh=%"PRId32"\n", frame_hdr.RenderWidth, frame_hdr.RenderHeight);
+                printf("TileRows=%"PRIu16" TileCols=%"PRIu16"\n", frame_hdr.tile_info.TileRows, frame_hdr.tile_info.TileCols);
                 break;
             }
             case OBP_OBU_REDUNDANT_FRAME_HEADER:
@@ -180,6 +181,8 @@ int main(int argc, char *argv[])
                     ret = 1;
                     goto end;
                 }
+                printf("rw=%"PRId32" rh=%"PRId32"\n", frame_hdr.RenderWidth, frame_hdr.RenderHeight);
+                printf("TileRows=%"PRIu16" TileCols=%"PRIu16"\n", frame_hdr.tile_info.TileRows, frame_hdr.tile_info.TileCols);
                 break;
             }
             case OBP_OBU_TILE_LIST: {

@@ -317,8 +317,8 @@ typedef struct OBPFrameHeader {
     int disable_frame_end_update_cdf;
     struct {
         int uniform_tile_spacing_flag;
-        uint16_t tileRows;
-        uint16_t tileCols;
+        uint16_t TileRows;
+        uint16_t TileCols;
         uint32_t context_update_tile_id;
         uint8_t tile_size_bytes_minus_1;
     } tile_info;
@@ -502,6 +502,7 @@ typedef struct OBPError {
      uint32_t RefRenderHeight[8];
      int32_t RefFrameSignBias[8];
      uint8_t order_hint;
+     uint32_t SavedGmParams[8][6];
  } OBPState;
 
 /******************
