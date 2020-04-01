@@ -140,12 +140,56 @@ static inline int32_t _obp_get_relative_dist(int32_t a, int32_t b, OBPSequenceHe
     return diff;
 }
 
+
+
 static inline uint32_t _obp_tile_log2(uint32_t blkSize, uint32_t target)
 {
     uint32_t k;
     for (k = 0; (blkSize << k) < target; k++) {
     }
     return k;
+}
+
+static inline uint32_t _obp_floor_log2(uint32_t a)
+{
+    uint32_t s = 0;
+    uint32_t x = a;
+    while (x != 0) {
+        x = x >> 1;
+        s++;
+    }
+    return s - 1;
+}
+
+static inline int _obp_ns(_OBPBitReader *br, uint32_t n, uint32_t *out, OBPError *err)
+{
+    uint32_t w = _obp_floor_log2(n) + 1;
+    uint32_t m = (((uint32_t)1) << w) - n;
+    uint32_t v;
+    uint32_t extra_bit;
+
+    assert(w - 1 <= 32);
+    _obp_br(v, br, ((uint8_t)(w - 1)));
+    if (v < m) {
+        *out = v;
+        return 0;
+    }
+    _obp_br(extra_bit, br, 1);
+    *out = (v << 1) - m + extra_bit;
+    return 0;
+}
+static inline int _obp_su(_OBPBitReader *br, uint32_t n, int32_t *out, OBPError *err)
+{
+    int32_t value;
+    uint32_t signMask;
+
+    _obp_br(value, br, n);
+    signMask = ((uint32_t)1) << (n - 1);
+    if (value & signMask) {
+        value = value - 2 * signMask;
+    }
+    *out = value;
+    return 0;
 }
 
 /*********************
@@ -277,6 +321,23 @@ static inline int _obp_set_frame_refs(OBPFrameHeader *fh, OBPSequenceHeader *seq
 
     return 0;
 }
+
+static inline int _obp_read_delta_q(_OBPBitReader *br, int32_t *out, OBPError *err)
+{
+    int delta_coded;
+    _obp_br(delta_coded, br, 1);
+    if (delta_coded) {
+        int32_t val;
+        int ret = _obp_su(br, 7, &val, err);
+        if (ret < 0)
+            return ret;
+        *out = val;
+    } else {
+        *out = 1;
+    }
+    return 0;
+}
+
 
 /*****************************
  * API functions start here. *
@@ -1216,7 +1277,116 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
         MiRowStarts[i]           = MiRows;
         fh->tile_info.TileRows   = i;
     } else {
-        assert(0);
+        uint32_t widestTileSb = 0;
+        uint32_t startSb      = 0;
+        uint32_t i, maxTileHeightSb;
+        for (i = 0; startSb < sbCols; i++) {
+            int ret;
+            char err_buf[1024];
+            OBPError error = { &err_buf[0], 1024 };
+            uint32_t maxWidth, sizeSb;
+            uint32_t width_in_sbs_minus_1;
+            MiColStarts[i] = startSb << sbShift;
+            maxWidth       = _OBP_MIN(sbCols - startSb, maxTileWidthSb);
+            ret            = _obp_ns(br, maxWidth, &width_in_sbs_minus_1, &error);
+            if (ret < 0) {
+                snprintf(err->error, err->size, "Couldn't read width_in_sbs_minus_1: %s", error.error);
+                return -1;
+            }
+            sizeSb        = width_in_sbs_minus_1 + 1;
+            widestTileSb  = _OBP_MAX(sizeSb, widestTileSb);
+            startSb      += sizeSb;
+        }
+        MiColStarts[i]         = MiCols;
+        fh->tile_info.TileCols = i;
+        TileColsLog2           = _obp_tile_log2(1, fh->tile_info.TileCols);
+
+        if (minLog2Tiles > 0) {
+            maxTileAreaSb = (sbRows * sbCols) >> (minLog2Tiles + 1);
+        } else {
+            maxTileAreaSb = sbRows * sbCols;
+        }
+        maxTileHeightSb = _OBP_MAX(maxTileAreaSb / widestTileSb, 1);
+
+        startSb = 0;
+        for (i = 0; startSb < sbRows; i++) {
+            int ret;
+            char err_buf[1024];
+            OBPError error = { &err_buf[0], 1024 };
+            uint32_t maxHeight, sizeSb;
+            uint32_t height_in_sbs_minus_1;
+            MiRowStarts[i] = startSb << sbShift;
+            maxHeight      = _OBP_MIN(sbRows - startSb, maxTileHeightSb);
+            ret            = _obp_ns(br, maxHeight, &height_in_sbs_minus_1, &error);
+            if (ret < 0) {
+                snprintf(err->error, err->size, "Couldn't read height_in_sbs_minus_1: %s", error.error);
+                return -1;
+            }
+            sizeSb   = height_in_sbs_minus_1 + 1;
+            startSb += sizeSb;
+        }
+        MiRowStarts[i]          = MiRows;
+        fh->tile_info.TileRows = i;
+        TileRowsLog2           = _obp_tile_log2(1, fh->tile_info.TileRows);
+    }
+    uint8_t TileSizeBytes = 0;
+    if (TileColsLog2 > 0 || TileRowsLog2 > 0) {
+        _obp_br(fh->tile_info.context_update_tile_id, br, (TileColsLog2 + TileRowsLog2));
+        _obp_br(fh->tile_info.tile_size_bytes_minus_1, br, 2);
+        TileSizeBytes = fh->tile_info.tile_size_bytes_minus_1 + 1;
+    } else {
+        fh->tile_info.context_update_tile_id = 0;
+    }
+    /* quantization_params() */
+    _obp_br(fh->quantization_params.base_q_idx, br, 8);
+    int32_t DeltaQYDc, DeltaQUDc, DeltaQUAc, DeltaQVDc, DeltaQVAc;
+    int ret = _obp_read_delta_q(br, &DeltaQYDc, err);
+    if (ret < 0) {
+        return -1;
+    }
+    if (seq->color_config.NumPlanes > 1) {
+        int ret;
+        if (seq->color_config.separate_uv_delta_q) {
+            _obp_br(fh->quantization_params.diff_uv_delta, br, 1);
+        } else {
+            fh->quantization_params.diff_uv_delta = 0;
+        }
+        ret = _obp_read_delta_q(br, &DeltaQUDc, err);
+        if (ret < 0) {
+            return -1;
+        }
+        ret = _obp_read_delta_q(br, &DeltaQUAc, err);
+        if (ret < 0) {
+            return -1;
+        }
+        if (fh->quantization_params.diff_uv_delta) {
+            ret = _obp_read_delta_q(br, &DeltaQVDc, err);
+            if (ret < 0) {
+                return -1;
+            }
+            ret = _obp_read_delta_q(br, &DeltaQVAc, err);
+            if (ret < 0) {
+                return -1;
+            }
+        } else {
+            DeltaQVDc = DeltaQUDc;
+            DeltaQVAc = DeltaQUAc;
+        }
+    } else {
+        DeltaQUDc = 0;
+        DeltaQUAc = 0;
+        DeltaQVDc = 0;
+        DeltaQVAc = 0;
+    }
+    _obp_br(fh->quantization_params.using_qmatrix, br, 1);
+    if (fh->quantization_params.using_qmatrix) {
+        _obp_br(fh->quantization_params.qm_y, br, 4);
+        _obp_br(fh->quantization_params.qm_u, br, 4);
+        if (!seq->color_config.separate_uv_delta_q) {
+            fh->quantization_params.qm_v = fh->quantization_params.qm_u;
+        } else {
+            _obp_br(fh->quantization_params.qm_v, br, 4);
+        }
     }
 
     return 0;

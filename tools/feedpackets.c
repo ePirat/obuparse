@@ -163,6 +163,7 @@ int main(int argc, char *argv[])
                 }
                 printf("rw=%"PRId32" rh=%"PRId32"\n", frame_hdr.RenderWidth, frame_hdr.RenderHeight);
                 printf("TileRows=%"PRIu16" TileCols=%"PRIu16"\n", frame_hdr.tile_info.TileRows, frame_hdr.tile_info.TileCols);
+                printf("base_q_idx = %"PRIu8"\n", frame_hdr.quantization_params.base_q_idx);
                 break;
             }
             case OBP_OBU_REDUNDANT_FRAME_HEADER:
@@ -183,6 +184,7 @@ int main(int argc, char *argv[])
                 }
                 printf("rw=%"PRId32" rh=%"PRId32"\n", frame_hdr.RenderWidth, frame_hdr.RenderHeight);
                 printf("TileRows=%"PRIu16" TileCols=%"PRIu16"\n", frame_hdr.tile_info.TileRows, frame_hdr.tile_info.TileCols);
+                printf("base_q_idx = %"PRIu8"\n", frame_hdr.quantization_params.base_q_idx);
                 break;
             }
             case OBP_OBU_TILE_LIST: {
