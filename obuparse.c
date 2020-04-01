@@ -338,6 +338,24 @@ static inline int _obp_read_delta_q(_OBPBitReader *br, int32_t *out, OBPError *e
     return 0;
 }
 
+static inline uint8_t _obp_get_qindex(int ignoreDeltaQ, int segmentId, int16_t CurrentQIndex, OBPFrameHeader *fh, int FeatureEnabled[8][8], int16_t FeatureData[8][8])
+{
+    if (fh->segmentation_params.segmentation_enabled && FeatureEnabled[segmentId][0]) {
+        int16_t data   = FeatureData[segmentId][0];
+        int32_t qindex = data + ((int32_t) fh->quantization_params.base_q_idx);
+        if (ignoreDeltaQ == 0 && fh->delta_q_params.delta_q_present == 1) {
+            qindex = CurrentQIndex + data;
+        }
+        return _OBP_MAX(0, _OBP_MIN(255, qindex));
+    }
+
+    if (ignoreDeltaQ == 0 && fh->delta_q_params.delta_q_present == 1) {
+        return CurrentQIndex;
+    }
+
+    return fh->quantization_params.base_q_idx;
+}
+
 
 /*****************************
  * API functions start here. *
@@ -1476,6 +1494,110 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
         if (fh->delta_lf_params.delta_lf_present) {
             _obp_br(fh->delta_lf_params.delta_lf_res, br, 2);
             _obp_br(fh->delta_lf_params.delta_lf_multi, br, 1);
+        }
+    }
+    /* skipped because not relevant:
+
+       if (fh->primary_ref_frame == 7) {
+           init_coeff_cdfs();
+       } else {
+           lnit_coeff_cdfs();
+       }
+     */
+    int CodedLossless = 1;
+    int LosslessArray[8];
+    for (int segmentId = 0; segmentId < 8; segmentId++ ) {
+        uint8_t qindex           = _obp_get_qindex(1, segmentId, 0, fh, FeatureEnabled, FeatureData);
+        LosslessArray[segmentId] = (qindex == 0 && DeltaQYDc == 0 && DeltaQUAc == 0 && DeltaQUDc == 0 && DeltaQVAc == 0 && DeltaQVDc == 0);
+        if (!LosslessArray[segmentId]) {
+            CodedLossless = 0;
+        }
+        /* SegQMLevel not relevant to OBU parsing.*/
+    }
+    int AllLossless = (CodedLossless && (FrameWidth == UpscaledWidth));
+    /* loop_filter_params() */
+    if (CodedLossless || fh->allow_intrabc) {
+        fh->loop_filter_params.loop_filter_delta_enabled = 1;
+        fh->loop_filter_params.loop_filter_ref_deltas[0] = 1;
+        fh->loop_filter_params.loop_filter_ref_deltas[1] = 0;
+        fh->loop_filter_params.loop_filter_ref_deltas[2] = 0;
+        fh->loop_filter_params.loop_filter_ref_deltas[3] = 0;
+        fh->loop_filter_params.loop_filter_ref_deltas[4] = 0;
+        fh->loop_filter_params.loop_filter_ref_deltas[5] = -1;
+        fh->loop_filter_params.loop_filter_ref_deltas[6] = -1;
+        fh->loop_filter_params.loop_filter_ref_deltas[7] = -1;
+        for (int i = 0; i < 2; i++) {
+            fh->loop_filter_params.loop_filter_mode_deltas[i] = 0;
+        }
+        /* return */
+    } else {
+        _obp_br(fh->loop_filter_params.loop_filter_level[0], br, 6);
+        _obp_br(fh->loop_filter_params.loop_filter_level[1], br, 6);
+        if (seq->color_config.NumPlanes > 1) {
+            if (fh->loop_filter_params.loop_filter_level[0] || fh->loop_filter_params.loop_filter_level[1]) {
+                _obp_br(fh->loop_filter_params.loop_filter_level[2], br, 6);
+                _obp_br(fh->loop_filter_params.loop_filter_level[3], br, 6);
+            }
+        }
+        _obp_br(fh->loop_filter_params.loop_filter_sharpness, br, 3);
+        _obp_br(fh->loop_filter_params.loop_filter_delta_enabled, br, 1);
+        if (fh->loop_filter_params.loop_filter_delta_enabled == 1) {
+            _obp_br(fh->loop_filter_params.loop_filter_delta_update, br, 1);
+            if (fh->loop_filter_params.loop_filter_delta_update == 1) {
+                for (int i = 0; i < 8; i++) {
+                    int update_ref_delta;
+                    _obp_br(update_ref_delta, br, 1);
+                    if (update_ref_delta) {
+                        int32_t val;
+                        ret = _obp_su(br, 7, &val, err);
+                        if (ret < 0) {
+                            return -1;
+                        }
+                        fh->loop_filter_params.loop_filter_ref_deltas[i] = val;
+                    }
+                }
+                for (int i = 0; i < 2; i++) {
+                    int update_mode_delta;
+                    _obp_br(update_mode_delta, br, 1);
+                    if (update_mode_delta) {
+                        int32_t val;
+                        ret = _obp_su(br, 7, &val, err);
+                        if (ret < 0) {
+                            return -1;
+                        }
+                        fh->loop_filter_params.loop_filter_mode_deltas[i] = val;
+                    }
+                }
+            }
+        }
+    }
+    /* cdef_params() */
+    uint8_t CdefDamping;
+    if (CodedLossless || fh->allow_intrabc || !seq->enable_cdef) {
+        fh->cdef_params.cdef_bits               = 0;
+        fh->cdef_params.cdef_y_pri_strength[0]  = 0;
+        fh->cdef_params.cdef_y_sec_strength[0]  = 0;
+        fh->cdef_params.cdef_uv_pri_strength[0] = 0;
+        fh->cdef_params.cdef_uv_sec_strength[0] = 0;
+        CdefDamping                             = 3;
+        /* return */
+    } else {
+        _obp_br(fh->cdef_params.cdef_damping_minus_3, br, 2);
+        CdefDamping = fh->cdef_params.cdef_damping_minus_3 + 3;
+        _obp_br(fh->cdef_params.cdef_bits, br, 2);
+        for (int i = 0; i < (i << fh->cdef_params.cdef_bits); i++) {
+            _obp_br(fh->cdef_params.cdef_y_pri_strength[i], br, 4);
+            _obp_br(fh->cdef_params.cdef_y_sec_strength[i], br, 2);
+            if (fh->cdef_params.cdef_y_sec_strength[i] == 3) {
+                fh->cdef_params.cdef_y_sec_strength[i] += 1;
+            }
+            if (seq->color_config.NumPlanes > 1) {
+                _obp_br(fh->cdef_params.cdef_uv_pri_strength[i], br, 4);
+                _obp_br(fh->cdef_params.cdef_uv_sec_strength[i], br, 2);
+                if (fh->cdef_params.cdef_uv_sec_strength[i] == 3) {
+                    fh->cdef_params.cdef_uv_sec_strength[i] += 1;
+                }
+            }
         }
     }
 
