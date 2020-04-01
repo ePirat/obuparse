@@ -312,7 +312,7 @@ static inline int _obp_set_frame_refs(OBPFrameHeader *fh, OBPSequenceHeader *seq
     usedFrame[fh->gold_frame_idx] = 2;
     curFrameHint                  = 1 << (seq->OrderHintBits - 1);
     for (int i = 0; i < 8; i++) {
-        shiftedOrderHints[i] = curFrameHint + _obp_get_relative_dist(state->RefOrderHint[i], state->order_hint, seq);
+        shiftedOrderHints[i] = curFrameHint + _obp_get_relative_dist(state->RefOrderHint[i], fh->order_hint, seq);
     }
     lastOrderHint = shiftedOrderHints[fh->last_frame_idx];
     goldOrderHint = shiftedOrderHints[fh->gold_frame_idx];
@@ -1133,18 +1133,18 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
         if (!seq->enable_order_hint) {
             fh->frame_refs_short_signaling = 0;
         } else {
-            int ret;
-            char err_buf[1024];
-            OBPError error = { &err_buf[0], 1024 };
             _obp_br(fh->frame_refs_short_signaling, br, 1);
             if (fh->frame_refs_short_signaling) {
+                int ret;
+                char err_buf[1024];
+                OBPError error = { &err_buf[0], 1024 };
                 _obp_br(fh->last_frame_idx, br, 3);
                 _obp_br(fh->gold_frame_idx, br, 3);
-            }
-            ret = _obp_set_frame_refs(fh, seq, state, &error);
-            if (ret < 0) {
-                snprintf(err->error, err->size, "Failed to set frame refs: %s", error.error);
-                return -1;
+                ret = _obp_set_frame_refs(fh, seq, state, &error);
+                if (ret < 0) {
+                    snprintf(err->error, err->size, "Failed to set frame refs: %s", error.error);
+                    return -1;
+                }
             }
         }
         for (int i = 0; i < 7; i++) {
@@ -1163,8 +1163,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
                 }
             }
         }
-
-        if (!fh->frame_size_override_flag && !fh->error_resilient_mode) {
+        if (fh->frame_size_override_flag && !fh->error_resilient_mode) {
             for (int i = 0; i < 7; i++) {
                 _obp_br(fh->found_ref, br, 1);
                 if (fh->found_ref == 1) {
@@ -1176,7 +1175,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
                     break;
                 }
             }
-            if (fh->found_ref) {
+            if (fh->found_ref == 0) {
                 /* frame_size() */
                 if (fh->frame_size_override_flag) {
                     uint8_t n = seq->frame_width_bits_minus_1 + 1;
@@ -1239,7 +1238,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
                 MiRows = 2 * ((FrameHeight + 7) >> 3);
             }
         } else {
-        /* frame_size() */
+            /* frame_size() */
             if (fh->frame_size_override_flag) {
                 uint8_t n = seq->frame_width_bits_minus_1 + 1;
                 _obp_br(fh->frame_width_minus_1, br, n);
@@ -1294,7 +1293,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             _obp_br(fh->interpolation_filter.interpolation_filter, br, 2);
         }
         _obp_br(fh->is_motion_mode_switchable, br, 1);
-        if (fh->error_resilient_mode && !seq->enable_ref_frame_mvs) {
+        if (fh->error_resilient_mode || !seq->enable_ref_frame_mvs) {
             fh->use_ref_frame_mvs = 0;
         } else {
             _obp_br(fh->use_ref_frame_mvs, br, 1);
@@ -2029,6 +2028,13 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
                 fh->global_motion_params.gm_params[i][j] = state->SavedGmParams[fh->frame_to_show_map_idx][i][j];
             }
         }
+    }
+    if (fh->show_existing_frame) {
+        *SeenFrameHeader = 0;
+        state->prev_filled = 0;
+    } else {
+        state->prev = *fh;
+        state->prev_filled = 1;
     }
 
     return 0;
