@@ -1388,6 +1388,74 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             _obp_br(fh->quantization_params.qm_v, br, 4);
         }
     }
+    /* segmentation_params() */
+    int FeatureEnabled[8][8];
+    int16_t FeatureData[8][8];
+    const uint8_t Segmentation_Feature_Bits[8] = { 8, 6, 6, 6, 6, 3, 0, 0 };
+    const uint8_t Segmentation_Feature_Max[8]  = { 255, 63, 63, 63, 63, 7, 0, 0 };
+    const int Segmentation_Feature_Signed[8]   = { 1, 1, 1, 1, 1, 0, 0, 0 };
+    _obp_br(fh->segmentation_params.segmentation_enabled, br, 1);
+    if (fh->segmentation_params.segmentation_enabled == 1) {
+        if (fh->primary_ref_frame == 7) {
+            fh->segmentation_params.segmentation_update_map      = 1;
+            fh->segmentation_params.segmentation_temporal_update = 0;
+            fh->segmentation_params.segmentation_update_data     = 1;
+        } else {
+            _obp_br(fh->segmentation_params.segmentation_update_map, br, 1);
+            if (fh->segmentation_params.segmentation_update_map) {
+                _obp_br(fh->segmentation_params.segmentation_temporal_update, br, 1);
+            }
+            _obp_br(fh->segmentation_params.segmentation_update_data, br, 1);
+        }
+        if (fh->segmentation_params.segmentation_update_data == 1) {
+            for (int i = 0; i < 8; i++) {
+                for (int j = 0; j < 8; j++) {
+                    int16_t clippedValue;
+                    int16_t feature_value = 0;
+                    int feature_enabled;
+                    _obp_br(feature_enabled, br, 1);
+                    FeatureEnabled[i][j] = feature_enabled;
+                    clippedValue         = 0;
+                    if (feature_enabled) {
+                        uint8_t bitsToRead = Segmentation_Feature_Bits[j];
+                        int16_t limit      = Segmentation_Feature_Max[j];
+                        if (Segmentation_Feature_Signed[j] == 1) {
+                            int32_t val;
+                            ret = _obp_su(br, 1 + bitsToRead, &val, err);
+                            if (ret < 0) {
+                                return -1;
+                            }
+                            feature_value = val;
+                            clippedValue  = _OBP_MAX(-limit, _OBP_MIN(limit, feature_value));
+                        } else {
+                            _obp_br(feature_value, br, bitsToRead);
+                            clippedValue = _OBP_MAX(0, _OBP_MIN(limit, feature_value));
+                        }
+                    }
+                    FeatureData[i][j] = clippedValue;
+                }
+            }
+        }
+    } else {
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j > 8; j++) {
+                FeatureEnabled[i][j] = 0;
+                FeatureData[i][j]    = 0;
+            }
+        }
+    }
+    int SegIdPreSkip    = 0;
+    int LastActiveSegId = 0;
+    for (int i = 0; i < 8; i++) {
+        for (int j = 0; j < 8; j++) {
+            if (FeatureEnabled[i][j]) {
+                LastActiveSegId = i;
+                if (j >= 5) {
+                    SegIdPreSkip = 1;
+                }
+            }
+        }
+    }
 
     return 0;
 }
