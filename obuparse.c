@@ -312,7 +312,7 @@ static inline int _obp_set_frame_refs(OBPFrameHeader *fh, OBPSequenceHeader *seq
     usedFrame[fh->gold_frame_idx] = 2;
     curFrameHint                  = 1 << (seq->OrderHintBits - 1);
     for (int i = 0; i < 8; i++) {
-        shiftedOrderHints[i] = curFrameHint + _obp_get_relative_dist(state->RefOrderHint[i], state->order_hint, seq); /*TODO: see wrapup */
+        shiftedOrderHints[i] = curFrameHint + _obp_get_relative_dist(state->RefOrderHint[i], state->order_hint, seq);
     }
     lastOrderHint = shiftedOrderHints[fh->last_frame_idx];
     goldOrderHint = shiftedOrderHints[fh->gold_frame_idx];
@@ -925,7 +925,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
 
     *SeenFrameHeader = 1;
 
-    /* uncompressed_heade() */
+    /* uncompressed_header() */
     int idLen = 0; /* only set to 0 to shut up a compiler warning. */
     if (seq->frame_id_numbers_present_flag) {
         idLen = seq->additional_frame_id_length_minus_1 + seq->delta_frame_id_length_minus_2 + 3;
@@ -957,7 +957,8 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
                 fh->refresh_frame_flags = allFrames;
             }
             if (seq->film_grain_params_present) {
-                /* TODO: load_grain_params(frame_to_show_map_idx) */
+                /* load_grain_params() */
+                fh->film_grain_params = state->RefGrainParams[fh->frame_to_show_map_idx];
                 assert(0);
             }
             return 0;
@@ -1167,7 +1168,6 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             for (int i = 0; i < 7; i++) {
                 _obp_br(fh->found_ref, br, 1);
                 if (fh->found_ref == 1) {
-                    /* TODO: av1_decode_wrapup has https://aomediacodec.github.io/av1-spec/#set-frame-refs-process */
                     UpscaledWidth    = state->RefUpscaledWidth[fh->ref_frame_idx[i]];
                     FrameWidth       = UpscaledWidth;
                     FrameHeight      = state->RefFrameHeight[fh->ref_frame_idx[i]];
@@ -1315,6 +1315,8 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
     } else {
         _obp_br(fh->disable_frame_end_update_cdf, br, 1);
     }
+    int FeatureEnabled[8][8];
+    int16_t FeatureData[8][8];
     if (fh->primary_ref_frame == 7) {
         /* init_non_coeff_cdfs() not relevant to OBU parsing. */
         /* setup_past_independence() */
@@ -1339,14 +1341,24 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
     } else {
         /* load_cdfs() not relevant to OBU parsing. */
         /* load_preivous */
-        /* skipping prevFrame */
+        int prevFrame = fh->ref_frame_idx[fh->primary_ref_frame];
         for (int i = 0; i > 8; i++) {
             for (int j = 0; j < 6; j++) {
-                fh->global_motion_params.prev_gm_params[i][j] = state->SavedGmParams[i][j];
+                fh->global_motion_params.prev_gm_params[i][j] = state->SavedGmParams[prevFrame][i][j];
             }
         }
-        /* TODO: load_loop_filter_params() */
-        /* TODO: load_segmentation_params() */
+        /* load_loop_filter_params() */
+        for (int i = 0; i < 8; i++) {
+            fh->loop_filter_params.loop_filter_ref_deltas[i]  = state->SavedLoopFilterRefDeltas[prevFrame][i];
+            fh->loop_filter_params.loop_filter_mode_deltas[i] = state->SavedLoopFilterModeDeltas[prevFrame][i];
+        }
+        /* load_segmentation_params() */
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 8; j++) {
+                FeatureEnabled[i][j] = state->SavedFeatureEnabled[prevFrame][i][j];
+                FeatureData[i][j]    = state->SavedFeatureData[prevFrame][i][j];
+            }
+        }
     }
     /* Not relevant to OBU parsing:
            if (fh->use_ref_frame_mvs) {
@@ -1365,7 +1377,6 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
     uint32_t maxLog2TileRows = _obp_tile_log2(1, _OBP_MIN(sbRows, 64));
     uint32_t minLog2Tiles    = _OBP_MAX(minLog2TileCols, _obp_tile_log2(maxTileAreaSb, sbRows * sbCols));
     uint32_t minLog2TileRows, TileColsLog2, TileRowsLog2;
-    uint32_t MiColStarts[64], MiRowStarts[64];
     _obp_br(fh->tile_info.uniform_tile_spacing_flag, br, 1);
     if (fh->tile_info.uniform_tile_spacing_flag) {
         TileColsLog2 = minLog2TileCols;
@@ -1381,10 +1392,10 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
         uint32_t tileWidthSb = (sbCols + (1 << TileColsLog2) - 1) >> TileColsLog2;
         int i = 0;
         for (uint32_t startSb = 0; startSb < sbCols; startSb += tileWidthSb) {
-            MiColStarts[i] = startSb << sbShift;
+            /* MiColStarts[i] = startSb << sbShift; */
             i += 1;
         }
-        MiColStarts[i]           = MiCols;
+        /*MiColStarts[i]           = MiCols; */
         fh->tile_info.TileCols   = i;
 
         minLog2TileRows = _OBP_MAX((int64_t)minLog2Tiles - (int64_t)TileColsLog2, 0);
@@ -1401,10 +1412,10 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
         uint32_t tileHeightSb = (sbRows + (1 << TileRowsLog2) - 1) >> TileRowsLog2;
         i = 0;
         for (uint32_t startSb = 0; startSb < sbRows; startSb += tileHeightSb) {
-            MiRowStarts[i] = startSb << sbShift;
+            /*MiRowStarts[i] = startSb << sbShift;*/
             i += 1;
         }
-        MiRowStarts[i]           = MiRows;
+        /*MiRowStarts[i]           = MiRows;*/
         fh->tile_info.TileRows   = i;
     } else {
         uint32_t widestTileSb = 0;
@@ -1416,7 +1427,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             OBPError error = { &err_buf[0], 1024 };
             uint32_t maxWidth, sizeSb;
             uint32_t width_in_sbs_minus_1;
-            MiColStarts[i] = startSb << sbShift;
+            /* MiColStarts[i] = startSb << sbShift; */
             maxWidth       = _OBP_MIN(sbCols - startSb, maxTileWidthSb);
             ret            = _obp_ns(br, maxWidth, &width_in_sbs_minus_1, &error);
             if (ret < 0) {
@@ -1427,7 +1438,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             widestTileSb  = _OBP_MAX(sizeSb, widestTileSb);
             startSb      += sizeSb;
         }
-        MiColStarts[i]         = MiCols;
+        /*MiColStarts[i]         = MiCols;*/
         fh->tile_info.TileCols = i;
         TileColsLog2           = _obp_tile_log2(1, fh->tile_info.TileCols);
 
@@ -1445,7 +1456,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             OBPError error = { &err_buf[0], 1024 };
             uint32_t maxHeight, sizeSb;
             uint32_t height_in_sbs_minus_1;
-            MiRowStarts[i] = startSb << sbShift;
+            /*MiRowStarts[i] = startSb << sbShift;*/
             maxHeight      = _OBP_MIN(sbRows - startSb, maxTileHeightSb);
             ret            = _obp_ns(br, maxHeight, &height_in_sbs_minus_1, &error);
             if (ret < 0) {
@@ -1455,15 +1466,14 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             sizeSb   = height_in_sbs_minus_1 + 1;
             startSb += sizeSb;
         }
-        MiRowStarts[i]          = MiRows;
+        /*MiRowStarts[i]          = MiRows*/;
         fh->tile_info.TileRows = i;
         TileRowsLog2           = _obp_tile_log2(1, fh->tile_info.TileRows);
     }
-    uint8_t TileSizeBytes = 0;
     if (TileColsLog2 > 0 || TileRowsLog2 > 0) {
         _obp_br(fh->tile_info.context_update_tile_id, br, (TileColsLog2 + TileRowsLog2));
         _obp_br(fh->tile_info.tile_size_bytes_minus_1, br, 2);
-        TileSizeBytes = fh->tile_info.tile_size_bytes_minus_1 + 1;
+        /*TileSizeBytes = fh->tile_info.tile_size_bytes_minus_1 + 1;*/
     } else {
         fh->tile_info.context_update_tile_id = 0;
     }
@@ -1519,8 +1529,6 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
         }
     }
     /* segmentation_params() */
-    int FeatureEnabled[8][8];
-    int16_t FeatureData[8][8];
     const uint8_t Segmentation_Feature_Bits[8] = { 8, 6, 6, 6, 6, 3, 0, 0 };
     const uint8_t Segmentation_Feature_Max[8]  = { 255, 63, 63, 63, 63, 7, 0, 0 };
     const int Segmentation_Feature_Signed[8]   = { 1, 1, 1, 1, 1, 0, 0, 0 };
@@ -1574,7 +1582,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             }
         }
     }
-    int SegIdPreSkip    = 0;
+    /*int SegIdPreSkip    = 0;
     int LastActiveSegId = 0;
     for (int i = 0; i < 8; i++) {
         for (int j = 0; j < 8; j++) {
@@ -1585,7 +1593,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
                 }
             }
         }
-    }
+    }*/
     /* delta_q_params() */
     fh->delta_q_params.delta_q_res     = 0;
     fh->delta_q_params.delta_q_present = 0;
@@ -1684,18 +1692,17 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
         }
     }
     /* cdef_params() */
-    uint8_t CdefDamping;
     if (CodedLossless || fh->allow_intrabc || !seq->enable_cdef) {
         fh->cdef_params.cdef_bits               = 0;
         fh->cdef_params.cdef_y_pri_strength[0]  = 0;
         fh->cdef_params.cdef_y_sec_strength[0]  = 0;
         fh->cdef_params.cdef_uv_pri_strength[0] = 0;
         fh->cdef_params.cdef_uv_sec_strength[0] = 0;
-        CdefDamping                             = 3;
+        /* CdefDamping not relevant to OBU parsing. */
         /* return */
     } else {
         _obp_br(fh->cdef_params.cdef_damping_minus_3, br, 2);
-        CdefDamping = fh->cdef_params.cdef_damping_minus_3 + 3;
+        /* CdefDamping not relevant to OBU parsing. */
         _obp_br(fh->cdef_params.cdef_bits, br, 2);
         for (int i = 0; i < (i << fh->cdef_params.cdef_bits); i++) {
             _obp_br(fh->cdef_params.cdef_y_pri_strength[i], br, 4);
@@ -1907,9 +1914,10 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             }
             if (!fh->film_grain_params.update_grain) {
                 _obp_br(fh->film_grain_params.film_grain_params_ref_idx, br, 3);
-                /* tempGrainSeed = grain_seed */
-                /* TODO: load_grain_params() */
-                /* grain_seed = tempGrainSeed */
+                uint16_t tempGrainSeed = fh->film_grain_params.grain_seed;
+                /* load_grain_params() */
+                fh->film_grain_params            = state->RefGrainParams[fh->film_grain_params.film_grain_params_ref_idx];
+                fh->film_grain_params.grain_seed = tempGrainSeed;
                 /* return */
             } else {
                 uint8_t numPosLuma, numPosChroma;
@@ -1975,6 +1983,50 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
                 }
                 _obp_br(fh->film_grain_params.overlap_flag, br, 1);
                 _obp_br(fh->film_grain_params.clip_to_restricted_range, br, 1);
+            }
+        }
+    }
+
+    /* Stash refs for future frame use. */
+    /* decode_frame_wrapup() */
+    for (int i = 0; i < 8; i++) {
+        if ((fh->refresh_frame_flags >> i) & 1) {
+            state->RefOrderHint[i]     = fh->order_hint;
+            state->RefFrameType[i]     = fh->frame_type;
+            state->RefUpscaledWidth[i] = UpscaledWidth;
+            state->RefFrameHeight[i]   = FrameHeight;
+            state->RefRenderWidth[i]   = fh->RenderWidth;
+            state->RefRenderHeight[i]  = fh->RenderHeight;
+            state->RefFrameId[i]       = fh->current_frame_id;
+            state->RefGrainParams[i]   = fh->film_grain_params;
+            /* save_grain_params() */
+            for (int j = 0; j < 8; j++) {
+                for (int k = 0; k < 6; k++) {
+                    state->SavedGmParams[i][j][k] = fh->global_motion_params.gm_params[j][k];
+                }
+            }
+            /* save_segmentation_params() */
+            for (int j = 0; j < 8; j++) {
+                for (int k = 0; k < 8; k++) {
+                    state->SavedFeatureEnabled[i][j][k] = FeatureEnabled[j][k];
+                    state->SavedFeatureData[i][j][k]    = FeatureData[j][k];
+                }
+            }
+            /* save_loop_filter_params() */
+            for (int j = 0; j < 8; j++) {
+                state->SavedLoopFilterRefDeltas[i][j]  = fh->loop_filter_params.loop_filter_ref_deltas[j];
+                state->SavedLoopFilterModeDeltas[i][j] = fh->loop_filter_params.loop_filter_mode_deltas[j];
+            }
+        }
+    }
+
+    /* Handle show_existing_frame semantics. */
+    /* decode_frame_wrapup() */
+    if (fh->show_existing_frame && fh->frame_type == OBP_KEY_FRAME) {
+        fh->order_hint = state->RefOrderHint[fh->frame_to_show_map_idx];
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 6; j++) {
+                fh->global_motion_params.gm_params[i][j] = state->SavedGmParams[fh->frame_to_show_map_idx][i][j];
             }
         }
     }

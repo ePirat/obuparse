@@ -500,8 +500,13 @@ typedef struct OBPError {
      uint32_t RefRenderWidth[8];
      uint32_t RefRenderHeight[8];
      int32_t RefFrameSignBias[8];
+     OBPFilmGrainParameters RefGrainParams[8];
      uint8_t order_hint;
-     uint32_t SavedGmParams[8][6];
+     uint32_t SavedGmParams[8][8][6];
+     int SavedFeatureEnabled[8][8][8];
+     int16_t SavedFeatureData[8][8][8];
+     int8_t SavedLoopFilterRefDeltas[8][8];
+     int8_t SavedLoopFilterModeDeltas[8][8];
  } OBPState;
 
 /******************

@@ -40,6 +40,8 @@ int main(int argc, char *argv[])
 {
     FILE *ivf;
     int ret = 0;
+    OBPSequenceHeader hdr = {0};
+    int seen_seq = 0;
 
     if (argc < 2) {
         printf("Usage: %s file.ivf\n", argv[0]);
@@ -60,16 +62,14 @@ int main(int argc, char *argv[])
         goto end;
     }
 
-//    while (!feof(ivf))
-    do
+    while (!feof(ivf))
+//    do
     {
         uint8_t frame_header[12];
         uint8_t *packet_buf;
         size_t packet_size;
         size_t packet_pos = 0;
-        OBPSequenceHeader hdr = {0};
         OBPState state = {0};
-        int seen_seq = 0;
         int SeenFrameHeader = 0;
 
         size_t read_in = fread(&frame_header[0], 1, 12, ivf);
@@ -225,7 +225,8 @@ int main(int argc, char *argv[])
             ret = 1;
             goto end;
         }
-    } while(0);
+    }
+    //} while(0);
 
 end:
     fclose(ivf);
