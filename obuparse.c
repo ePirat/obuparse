@@ -178,6 +178,7 @@ static inline int _obp_ns(_OBPBitReader *br, uint32_t n, uint32_t *out, OBPError
     *out = (v << 1) - m + extra_bit;
     return 0;
 }
+
 static inline int _obp_su(_OBPBitReader *br, uint32_t n, int32_t *out, OBPError *err)
 {
     int32_t value;
@@ -189,6 +190,83 @@ static inline int _obp_su(_OBPBitReader *br, uint32_t n, int32_t *out, OBPError 
         value = value - 2 * signMask;
     }
     *out = value;
+    return 0;
+}
+
+static inline int _obp_decode_subexp(_OBPBitReader *br, int32_t numSyms, uint32_t *out, OBPError *err)
+{
+    int32_t i  = 0;
+    int32_t mk = 0;
+    int32_t k  = 3;
+    while (1) {
+        int32_t b2 = i ? k + i - 1 : k;
+        int32_t a  = 1 << b2;
+        if (numSyms <= mk + 3 * a) {
+            uint32_t val;
+            int ret = _obp_ns(br, numSyms - mk, &val, err);
+            if (ret < 0) {
+                return -1;
+            }
+            *out = val;
+            return 0;
+        } else {
+            int subexp_more_bits;
+            _obp_br(subexp_more_bits, br, 1);
+            if (subexp_more_bits) {
+                i++;
+                mk += a;
+            } else {
+                uint32_t subexp_bits;
+                assert(b2 <= 255);
+                _obp_br(subexp_bits, br, ((uint8_t)b2));
+                *out = subexp_bits + mk;
+                return 0;
+            }
+        }
+    }
+}
+
+static inline int32_t _obps_inverse_recenter(int32_t r, uint32_t v)
+{
+    if (((uint64_t)v) > ((uint64_t)(2 * r))) {
+        return (int32_t) v;
+    } else if (v & 1) {
+        return r - ((v + 1) >> 1);
+    } else {
+        return r + (v >> 1);
+    }
+}
+
+static inline int _obp_decode_unsigned_subexp_with_ref(_OBPBitReader *br, int32_t mx, int32_t r, int16_t *out, OBPError *err) {
+    uint32_t v;
+    int ret = _obp_decode_subexp(br, mx, &v, err);
+    if (ret < 0) {
+        return -1;
+    }
+    if (r < 0) { /* avoid signed shift */
+        if (-(-r << 1) <= mx) {
+            *out = _obps_inverse_recenter(r, v);
+            return 0;
+        }
+    }
+    if ((r << 1) <= mx) {
+        *out = _obps_inverse_recenter(r, v);
+        return 0;
+    } else {
+        *out = mx - 1 - _obps_inverse_recenter(mx - 1 - r, v);
+        return 0;
+    }
+
+    return 0;
+}
+
+static inline int _obp_decode_signed_subexp_with_ref(_OBPBitReader *br, int32_t low, int32_t high, int32_t r, int16_t *out, OBPError *err) {
+    int16_t val;
+    int ret = _obp_decode_unsigned_subexp_with_ref(br, high - low, r - low, &val, err);
+    if (ret < 0) {
+        return -1;
+    }
+    *out = val + low;
     return 0;
 }
 
@@ -354,6 +432,39 @@ static inline uint8_t _obp_get_qindex(int ignoreDeltaQ, int segmentId, int16_t C
     }
 
     return fh->quantization_params.base_q_idx;
+}
+
+static inline int _obp_read_global_param(_OBPBitReader *br, OBPFrameHeader *fh, uint8_t type, int ref, int idx, OBPError *err)
+{
+    uint8_t absBits  = 12;
+    uint8_t precBits = 15;
+    if (idx < 2) {
+        if (type == 1) {
+            absBits  = 9 - !fh->allow_high_precision_mv;
+            precBits = 3 - !fh->allow_high_precision_mv;
+        } else {
+            absBits  = 12;
+            precBits = 6;
+        }
+    }
+    int32_t precDiff = 16 - precBits;
+    int32_t round    = ((idx % 3) == 2) ? (1 << 16) : 0;
+    int32_t sub      = ((idx % 3) == 2) ? (1 << precBits) : 0;
+    int32_t mx       = (1 << absBits);
+    int32_t r        = (fh->global_motion_params.prev_gm_params[ref][idx] >> precDiff) - sub;
+    int16_t val;
+    int ret = _obp_decode_signed_subexp_with_ref(br, -mx, mx + 1, r, &val, err);
+    if (ret < 0) {
+        return -1;
+    }
+    if (val < 0) { /* signed shifts are bad. */
+        val                                          = -val;
+        fh->global_motion_params.gm_params[ref][idx] = (-(val << precDiff) + round);
+    } else {
+        fh->global_motion_params.gm_params[ref][idx] = (val << precDiff) + round;
+    }
+
+    return 0;
 }
 
 
@@ -1711,6 +1822,70 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
         _obp_br(fh->allow_warped_motion, br, 1);
     }
     _obp_br(fh->reduced_tx_set, br, 1);
+    /* global_motion_params() */
+    for (int ref = 1; ref < 7; ref++) {
+        fh->global_motion_params.gm_type[ref] = 0;
+        for(int i = 0; i < 6; i++) {
+            fh->global_motion_params.gm_params[ref][i] = (i % 3 == 2) ? (((uint32_t)1) << 16) : 0;
+        }
+    }
+    if (FrameIsIntra) {
+        /* return */
+    } else {
+        for (int ref = 1; ref < 7; ref++) {
+            uint8_t type;
+            int is_global;
+            _obp_br(is_global, br, 1);
+            if (is_global) {
+                int is_rot_zoom;
+                _obp_br(is_rot_zoom, br, 1);
+                if (is_rot_zoom) {
+                    type = 2;
+                } else {
+                    int is_translation;
+                    _obp_br(is_translation, br, 1);
+                    type = is_translation ? 1 : 3;
+                }
+            } else {
+                type = 0;
+            }
+            fh->global_motion_params.gm_type[ref] = type;
+
+            if (type >= 2) {
+                ret = _obp_read_global_param(br, fh, type, ref, 2, err);
+                if (ret < 0) {
+                    return -1;
+                }
+                ret = _obp_read_global_param(br, fh, type, ref, 3, err);
+                if (ret < 0) {
+                    return -1;
+                }
+                if (type == 3) {
+                    ret = _obp_read_global_param(br, fh, type, ref, 4, err);
+                    if (ret < 0) {
+                        return -1;
+                    }
+                    ret = _obp_read_global_param(br, fh, type, ref, 5, err);
+                    if (ret < 0) {
+                        return -1;
+                    }
+                } else {
+                    fh->global_motion_params.gm_params[ref][4] = -fh->global_motion_params.gm_params[ref][3];
+                    fh->global_motion_params.gm_params[ref][5] = fh->global_motion_params.gm_params[ref][2];
+                }
+            }
+            if (type >= 1) {
+                ret = _obp_read_global_param(br, fh, type, ref, 0, err);
+                if (ret < 0) {
+                    return -1;
+                }
+                ret = _obp_read_global_param(br, fh, type, ref, 1, err);
+                if (ret < 0) {
+                    return -1;
+                }
+            }
+        }
+    }
 
     return 0;
 }
