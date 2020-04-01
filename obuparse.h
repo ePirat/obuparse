@@ -378,7 +378,7 @@ typedef struct OBPFrameHeader {
         int32_t gm_params[8][6];
         uint32_t prev_gm_params[8][6];
     } global_motion_params;
-    OBPFilmGrainParameters film_grain_parameters;
+    OBPFilmGrainParameters film_grain_params;
 } OBPFrameHeader;
 
 /*

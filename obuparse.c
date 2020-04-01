@@ -19,6 +19,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "obuparse.h"
 
@@ -1883,6 +1884,97 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
                 if (ret < 0) {
                     return -1;
                 }
+            }
+        }
+    }
+    /* film_grain_params() */
+    if (!seq->film_grain_params_present || (!fh->show_frame && !fh->showable_frame)) {
+        /* reset_grain_params() */
+        memset(&fh->film_grain_params, 0, sizeof(fh->film_grain_params));
+        /* return */
+    } else {
+        _obp_br(fh->film_grain_params.apply_grain, br, 1);
+        if (!fh->film_grain_params.apply_grain) {
+            /* reset_grain_params() */
+            memset(&fh->film_grain_params, 0, sizeof(fh->film_grain_params));
+            /* return */
+        } else {
+            _obp_br(fh->film_grain_params.grain_seed, br, 16);
+            if (fh->frame_type == OBP_KEY_FRAME) {
+                _obp_br(fh->film_grain_params.update_grain, br, 1);
+            } else {
+                fh->film_grain_params.update_grain = 1;
+            }
+            if (!fh->film_grain_params.update_grain) {
+                _obp_br(fh->film_grain_params.film_grain_params_ref_idx, br, 3);
+                /* tempGrainSeed = grain_seed */
+                /* TODO: load_grain_params() */
+                /* grain_seed = tempGrainSeed */
+                /* return */
+            } else {
+                uint8_t numPosLuma, numPosChroma;
+                _obp_br(fh->film_grain_params.num_y_points, br, 4);
+                for (uint8_t i = 0; i < fh->film_grain_params.num_y_points; i++) {
+                    _obp_br(fh->film_grain_params.point_y_value[i], br, 8);
+                    _obp_br(fh->film_grain_params.point_y_scaling[i], br, 8);
+                }
+                if (seq->color_config.mono_chrome) {
+                    fh->film_grain_params.chroma_scaling_from_luma = 0;
+                } else {
+                    _obp_br(fh->film_grain_params.chroma_scaling_from_luma, br, 1);
+                }
+                if (seq->color_config.mono_chrome || fh->film_grain_params.chroma_scaling_from_luma || 
+                    (seq->color_config.subsampling_x == 1 && seq->color_config.subsampling_y == 1 &&
+                     fh->film_grain_params.num_y_points == 0)) {
+                     fh->film_grain_params.num_cb_points = 0;
+                     fh->film_grain_params.num_cr_points = 0;
+                } else {
+                    _obp_br(fh->film_grain_params.num_cb_points, br, 4);
+                    for (uint8_t i = 0; i < fh->film_grain_params.num_cb_points; i++) {
+                        _obp_br(fh->film_grain_params.point_cb_value[i], br, 8);
+                        _obp_br(fh->film_grain_params.point_cb_scaling[i], br, 8);
+                    }
+                    _obp_br(fh->film_grain_params.num_cr_points, br, 4);
+                    for (uint8_t i = 0; i < fh->film_grain_params.num_cr_points; i++) {
+                        _obp_br(fh->film_grain_params.point_cr_value[i], br, 8);
+                        _obp_br(fh->film_grain_params.point_cr_scaling[i], br, 8);
+                    }
+                }
+                _obp_br(fh->film_grain_params.grain_scaling_minus_8, br, 2);
+                _obp_br(fh->film_grain_params.ar_coeff_lag, br, 2);
+                numPosLuma = 2 * fh->film_grain_params.ar_coeff_lag * (fh->film_grain_params.ar_coeff_lag + 1);
+                if (fh->film_grain_params.num_y_points) {
+                    numPosChroma = numPosLuma + 1;
+                    for (uint8_t i = 0; i < numPosLuma; i++) {
+                        _obp_br(fh->film_grain_params.ar_coeffs_y_plus_128[i], br, 8);
+                    }
+                } else {
+                    numPosChroma = numPosLuma;
+                }
+                if (fh->film_grain_params.chroma_scaling_from_luma || fh->film_grain_params.num_cb_points) {
+                    for (uint8_t i = 0; i < numPosChroma; i++) {
+                        _obp_br(fh->film_grain_params.ar_coeffs_cb_plus_128[i], br, 8);
+                    }
+                }
+                if (fh->film_grain_params.chroma_scaling_from_luma || fh->film_grain_params.num_cr_points) {
+                    for (uint8_t i = 0; i < numPosChroma; i++) {
+                        _obp_br(fh->film_grain_params.ar_coeffs_cr_plus_128[i], br, 8);
+                    }
+                }
+                _obp_br(fh->film_grain_params.ar_coeff_shift_minus_6, br, 2);
+                _obp_br(fh->film_grain_params.grain_scale_shift, br, 2);
+                if (fh->film_grain_params.num_cb_points) {
+                    _obp_br(fh->film_grain_params.cb_mult, br, 8);
+                    _obp_br(fh->film_grain_params.cb_luma_mult, br, 8);
+                    _obp_br(fh->film_grain_params.cb_offset, br, 9);
+                }
+                if (fh->film_grain_params.num_cr_points) {
+                    _obp_br(fh->film_grain_params.cr_mult, br, 8);
+                    _obp_br(fh->film_grain_params.cr_luma_mult, br, 8);
+                    _obp_br(fh->film_grain_params.cr_offset, br, 9);
+                }
+                _obp_br(fh->film_grain_params.overlap_flag, br, 1);
+                _obp_br(fh->film_grain_params.clip_to_restricted_range, br, 1);
             }
         }
     }
