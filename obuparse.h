@@ -366,7 +366,6 @@ typedef struct OBPFrameHeader {
     struct {
         uint8_t lr_type[3];
         uint8_t lr_unit_shift;
-        uint8_t lr_unit_shift_extra;
         int lr_uv_shift;
     } lr_params;
     int tx_mode_select;

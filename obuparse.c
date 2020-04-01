@@ -1600,6 +1600,117 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             }
         }
     }
+    if (AllLossless || fh->allow_intrabc || seq->enable_restoration) {
+        fh->lr_params.lr_type[0] = 0;
+        fh->lr_params.lr_type[1] = 0;
+        fh->lr_params.lr_type[2] = 0;
+    } else {
+        int UsesLr       = 0;
+        int usesChromaLr = 0;
+        for (int i = 0; i < seq->color_config.NumPlanes; i++) {
+            _obp_br(fh->lr_params.lr_type[i], br, 2);
+            if (fh->lr_params.lr_type[i] != 0) {
+                UsesLr = 1;
+                if (i > 0) {
+                    usesChromaLr = 1;
+                }
+            }
+        }
+        if (UsesLr) {
+            if (seq->use_128x128_superblock) {
+                _obp_br(fh->lr_params.lr_unit_shift, br, 1);
+                fh->lr_params.lr_unit_shift++;
+            } else {
+                _obp_br(fh->lr_params.lr_unit_shift, br, 1);
+                if (fh->lr_params.lr_unit_shift) {
+                    uint8_t lr_unit_extra_shift;
+                    _obp_br(lr_unit_extra_shift, br, 1);
+                    fh->lr_params.lr_unit_shift += lr_unit_extra_shift;
+                }
+            }
+            /* LoopRestorationSize not relevant to OBU parsing. */
+            if (seq->color_config.subsampling_x && seq->color_config.subsampling_y && usesChromaLr) {
+                _obp_br(fh->lr_params.lr_uv_shift, br, 1);
+            } else {
+                fh->lr_params.lr_uv_shift = 0;
+            }
+            /* LoopRestorationSize not relevant to OBU parsing. */
+        }
+    }
+    /* read_tx_mode */
+    if (CodedLossless == 1) {
+        /* TxMode not relevant to OBU parsing. */
+    } else {
+        _obp_br(fh->tx_mode_select, br, 1);
+        if (fh->tx_mode_select) {
+            /* TxMode not relevant to OBU parsing. */
+        } else {
+            /* TxMode not relevant to OBU parsing. */
+        }
+    }
+    /* frame_reference_mode() */
+    if (FrameIsIntra) {
+        fh->reference_select = 0;
+    } else {
+        _obp_br(fh->reference_select, br, 1);
+    }
+    /* skip_mode_params() */
+    int skipModeAllowed;
+    if (FrameIsIntra || !fh->reference_select || !seq->enable_order_hint) {
+        skipModeAllowed = 0;
+    } else {
+        int forwardIdx       = -1;
+        int backwardIdx      = -1;
+        int32_t forwardHint  = 0; /* Never declare by spec! Bug? */
+        int32_t backwardHint = 0; /* Never declare by spec! Bug? */
+        for (int i = 0; i < 7; i++) {
+            int32_t refHint = state->RefOrderHint[fh->ref_frame_idx[i]];
+            if(_obp_get_relative_dist(refHint, OrderHint, seq) < 0) {
+                if (forwardIdx < 0 || _obp_get_relative_dist(refHint, forwardHint, seq) > 0) {
+                    forwardIdx  = i;
+                    forwardHint = refHint;
+                }
+            } else if (_obp_get_relative_dist(refHint, OrderHint, seq) > 0) {
+                if (backwardIdx < 0 || _obp_get_relative_dist(refHint, backwardHint, seq) < 0) {
+                    backwardIdx  = i;
+                    backwardHint = refHint;
+                }
+            }
+        }
+        if (forwardIdx < 0) {
+            skipModeAllowed = 0;
+        } else if (backwardIdx >= 0) {
+            skipModeAllowed = 1;
+            /* SkipModeFrame not relevant to OBU parsing. */
+        } else {
+            int     secondForwardIdx = -1;
+            int32_t secondForwardHint = 0; /* Never declare by spec! Bug? */
+            for (int i = 0; i < 7; i++) {
+                int32_t refHint = state->RefOrderHint[fh->ref_frame_idx[i]];
+                if (secondForwardIdx < 0 || _obp_get_relative_dist(refHint, secondForwardHint, seq) > 0) {
+                    secondForwardIdx  = i;
+                    secondForwardHint = refHint;
+                }
+            }
+            if (secondForwardIdx < 0) {
+                skipModeAllowed = 0;
+            } else {
+                skipModeAllowed = 1;
+                /* SkipModeFrame not relevant to OBU parsing. */
+            }
+        }
+    }
+    if (skipModeAllowed) {
+        _obp_br(fh->skip_mode_present, br, 1);
+    } else {
+        fh->skip_mode_present = 0;
+    }
+    if (FrameIsIntra || fh->error_resilient_mode || !seq->enable_warped_motion) {
+        fh->allow_warped_motion = 0;
+    } else {
+        _obp_br(fh->allow_warped_motion, br, 1);
+    }
+    _obp_br(fh->reduced_tx_set, br, 1);
 
     return 0;
 }
