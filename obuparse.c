@@ -1456,6 +1456,28 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             }
         }
     }
+    /* delta_q_params() */
+    fh->delta_q_params.delta_q_res     = 0;
+    fh->delta_q_params.delta_q_present = 0;
+    if (fh->quantization_params.base_q_idx > 0) {
+        _obp_br(fh->delta_q_params.delta_q_present, br, 1);
+    }
+    if (fh->delta_q_params.delta_q_present) {
+        _obp_br(fh->delta_q_params.delta_q_res, br, 2);
+    }
+    /* delta_lf_params() */
+    fh->delta_lf_params.delta_lf_present = 0;
+    fh->delta_lf_params.delta_lf_res     = 0;
+    fh->delta_lf_params.delta_lf_multi   = 0;
+    if (fh->delta_q_params.delta_q_present) {
+        if (!fh->allow_intrabc) {
+            _obp_br(fh->delta_lf_params.delta_lf_present, br, 1);
+        }
+        if (fh->delta_lf_params.delta_lf_present) {
+            _obp_br(fh->delta_lf_params.delta_lf_res, br, 2);
+            _obp_br(fh->delta_lf_params.delta_lf_multi, br, 1);
+        }
+    }
 
     return 0;
 }
