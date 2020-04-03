@@ -567,13 +567,69 @@ int obp_get_next_obu(uint8_t *buf, size_t buf_size, OBPOBUType *obu_type, ptrdif
  */
 int obp_parse_sequence_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq_header, OBPError *err);
 
+/*
+ * obp_parse_frame_header parses a frame header OBU and fills out the fields in a user-provided
+ * OBPFrameHeader structure.
+ *
+ * Input:
+ *     buf          - Input OBU buffer. This is expected to *NOT* contain the OBU header.
+ *     buf_size     - Size of the input OBU buffer.
+ *     state        - An opaque state structure. Must be zeroed by the user on first use.
+ *     temporal_id  - A temporal ID previously obtained from obu_parse_sequence header.
+ *     spatial_id   - A temporal ID previously obtained from obu_parse_sequence header.
+ *     err          - An error buffer and buffer size to write any error messages into.
+ *
+ * Output:
+ *     frame_header    - A user provided struture that will be filled in with all the parsed data.
+ *     SeenFrameHeader - Whether or not a frame header has beee seen. Tracking variable as per AV1 spec.
+ *
+ * Returns:
+ *     0 on success, -1 on error.
+ */
 int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq_header, OBPState *state,
                            int temporal_id, int spatial_id, OBPFrameHeader *frame_header, int *SeenFrameHeader, OBPError *err);
 
+/*
+ * obp_parse_frame parses a frame OBU and fills out the fields in user-provided OBPFrameHeader
+ * and OBPTileGroup structures.
+ *
+ * Input:
+ *     buf          - Input OBU buffer. This is expected to *NOT* contain the OBU header.
+ *     buf_size     - Size of the input OBU buffer.
+ *     state        - An opaque state structure. Must be zeroed by the user on first use.
+ *     temporal_id  - A temporal ID previously obtained from obu_parse_sequence header.
+ *     spatial_id   - A temporal ID previously obtained from obu_parse_sequence header.
+ *     err          - An error buffer and buffer size to write any error messages into.
+ *
+ * Output:
+ *     frame_header    - A user provided struture that will be filled in with all the parsed data.
+ *     tile_group      - A user provided struture that will be filled in with all the parsed data.
+ *     SeenFrameHeader - Whether or not a frame header has beee seen. Tracking variable as per AV1 spec.
+ *
+ * Returns:
+ *     0 on success, -1 on error.
+ */
 int obp_parse_frame(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq_header, OBPState *state,
                     int temporal_id, int spatial_id, OBPFrameHeader *frame_header, OBPTileGroup *tile_group,
                     int *SeenFrameHeader, OBPError *err);
 
+/*
+ * obp_parse_tile_group parses a tile group OBU and fills out the fields in a
+ * user-provided OBPTileGroup structure.
+ *
+ * Input:
+ *     buf          - Input OBU buffer. This is expected to *NOT* contain the OBU header.
+ *     buf_size     - Size of the input OBU buffer.
+ *     frame_header - A filled in frame header OBU previous seen.
+ *     err          - An error buffer and buffer size to write any error messages into.
+ *
+ * Output:
+ *     tile_group      - A user provided struture that will be filled in with all the parsed data.
+ *     SeenFrameHeader - Whether or not a frame header has beee seen. Tracking variable as per AV1 spec.
+ *
+ * Returns:
+ *     0 on success, -1 on error.
+ */
 int obp_parse_tile_group(uint8_t *buf, size_t buf_size, OBPFrameHeader *frame_header, OBPTileGroup *tile_group,
                          int *SeenFrameHeader, OBPError *err);
 
