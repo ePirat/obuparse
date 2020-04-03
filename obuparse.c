@@ -64,6 +64,16 @@ static inline uint64_t _obp_br_unchecked(_OBPBitReader *br, uint8_t n)
     return (br->bit_buffer >> br->bits_in_buf) & ((((uint64_t)1) << n) - 1);
 }
 
+static inline void _obp_br_byte_alignment(_OBPBitReader *br)
+{
+    br->bits_in_buf -= br->bits_in_buf % 8;
+}
+
+static inline size_t _obp_br_get_pos(_OBPBitReader *br)
+{
+    return (br->buf_pos * 8) - ((size_t) br->bits_in_buf);
+}
+
 #if OBP_UNCHECKED_BITREADER
 #define _obp_br(x, br, n) do { \
     x = _obp_br_unchecked(br, n); \
@@ -160,6 +170,18 @@ static inline uint32_t _obp_floor_log2(uint32_t a)
         s++;
     }
     return s - 1;
+}
+
+static inline uint64_t _obp_le(uint8_t *buf, uint8_t n)
+{
+    uint64_t t = 0;
+    size_t pos = 0;
+    for (uint8_t i = 0; i < n; i++) {
+        uint8_t byte = buf[pos];
+        t += ((uint64_t)byte) << (i * 8);
+        pos++;
+    }
+    return t;
 }
 
 static inline int _obp_ns(_OBPBitReader *br, uint32_t n, uint32_t *out, OBPError *err)
@@ -785,6 +807,76 @@ int obp_parse_tile_list(uint8_t *buf, size_t buf_size, OBPTileList *tile_list, O
     return 0;
 }
 
+int obp_parse_tile_group(uint8_t *buf, size_t buf_size, OBPFrameHeader *frame_header, OBPTileGroup *tile_group,
+                         int *SeenFrameHeader, OBPError *err)
+{
+    _OBPBitReader b   = _obp_new_br(buf, buf_size);
+    _OBPBitReader *br = &b;
+
+    tile_group->NumTiles                        = frame_header->tile_info.TileCols * frame_header->tile_info.TileRows;
+    size_t startBitPos                          = 0;
+    tile_group->tile_start_and_end_present_flag = 0;
+
+    if (tile_group->NumTiles > 1) {
+        _obp_br(tile_group->tile_start_and_end_present_flag, br, 1);
+    }
+    if (tile_group->NumTiles == 1 || !tile_group->tile_start_and_end_present_flag) {
+        tile_group->tg_start = 0;
+        tile_group->tg_end   = tile_group->NumTiles - 1;
+    } else {
+        uint8_t tileBits = _obp_tile_log2(1, frame_header->tile_info.TileCols) + _obp_tile_log2(1, frame_header->tile_info.TileRows);
+        _obp_br(tile_group->tg_start, br, tileBits);
+        _obp_br(tile_group->tg_end, br, tileBits);
+    }
+    _obp_br_byte_alignment(br);
+    size_t endBitPos   = _obp_br_get_pos(br);
+    size_t headerBytes = (endBitPos - startBitPos) / 8;
+    size_t sz          = buf_size - headerBytes;
+    size_t pos         = headerBytes;
+
+    for (uint16_t TileNum = tile_group->tg_start; TileNum <= tile_group->tg_end; TileNum++) {
+        /* tileRow = TileNum / TileCols */
+        /* tileCol = TileNum % TileCols */
+        int lastTile     = (TileNum == tile_group->tg_end);
+        if (lastTile) {
+            tile_group->TileSize[TileNum] = sz;
+        } else {
+            uint16_t TileSizeBytes = frame_header->tile_info.tile_size_bytes_minus_1 + 1;
+            uint64_t tile_size_minus_1;
+            if (sz < TileSizeBytes) {
+                snprintf(err->error, err->size, "Not enough bytes left to read tile size for tile %"PRIu16".", TileNum);
+                return -1;
+            }
+            tile_size_minus_1             = _obp_le(buf + pos, TileSizeBytes);
+            tile_group->TileSize[TileNum] = tile_size_minus_1 + 1;
+            if (sz < tile_group->TileSize[TileNum]) {
+                snprintf(err->error, err->size, "Not enough bytes to contain TileSize for tile %"PRIu16".", TileNum);
+                return -1;
+            }
+            sz  -= tile_group->TileSize[TileNum] + TileSizeBytes;
+            pos += tile_group->TileSize[TileNum] + TileSizeBytes;
+        }
+        /* MiRowStart = MiRowStarts[ tileRow ] */
+        /* MiRowEnd = MiRowStarts[ tileRow + 1 ] */
+        /* MiColStart = MiColStarts[ tileCol ] */
+        /* MiColEnd = MiColStarts[ tileCol + 1 ] */
+        /* CurrentQIndex = base_q_idx */
+        /* init_symbol( tileSize ) */
+        /* decode_tile( ) */
+        /* exit_symbol( ) */
+    }
+    if (tile_group->tg_end == tile_group->NumTiles - 1) {
+        /* if ( !disable_frame_end_update_cdf ) {
+               frame_end_update_cdf( )
+           }
+         */
+        /* decode_frame_wrapup() is handled in obp_parse_frame_header. */
+        *SeenFrameHeader = 0;
+    }
+
+    return 0;
+}
+
 int obp_parse_metadata(uint8_t *buf, size_t buf_size, OBPMetadata *metadata, OBPError *err)
 {
     uint64_t val;
@@ -898,7 +990,7 @@ int obp_parse_metadata(uint8_t *buf, size_t buf_size, OBPMetadata *metadata, OBP
 }
 
 int obp_parse_frame(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq, OBPState *state,
-                    int temporal_id, int spatial_id, OBPFrameHeader *fh, void *tile_group,
+                    int temporal_id, int spatial_id, OBPFrameHeader *fh, OBPTileGroup *tile_group,
                     int *SeenFrameHeader, OBPError *err)
 {
     // TODO: Define OBPTileGroup and pals

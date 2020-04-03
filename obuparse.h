@@ -382,6 +382,17 @@ typedef struct OBPFrameHeader {
 } OBPFrameHeader;
 
 /*
+ * Tile Group OBU.
+ */
+typedef struct OBPTileGroup {
+    uint16_t NumTiles;
+    int tile_start_and_end_present_flag;
+    uint16_t tg_start;
+    uint16_t tg_end;
+    uint64_t TileSize[4096];
+} OBPTileGroup;
+
+/*
  * Tile List OBU
  */
 typedef struct OBPTileList {
@@ -557,8 +568,11 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
                            int temporal_id, int spatial_id, OBPFrameHeader *frame_header, int *SeenFrameHeader, OBPError *err);
 
 int obp_parse_frame(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq_header, OBPState *state,
-                    int temporal_id, int spatial_id, OBPFrameHeader *frame_header, void *tile_group,
+                    int temporal_id, int spatial_id, OBPFrameHeader *frame_header, OBPTileGroup *tile_group,
                     int *SeenFrameHeader, OBPError *err);
+
+int obp_parse_tile_group(uint8_t *buf, size_t buf_size, OBPFrameHeader *frame_header, OBPTileGroup *tile_group,
+                         int *SeenFrameHeader, OBPError *err);
 
 /*
  * obp_parse_metadata parses a metadata OBU and fills out the fields in a user-provided OBPMetadata

@@ -33,6 +33,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "obuparse.h"
 
@@ -69,6 +70,7 @@ int main(int argc, char *argv[])
         uint8_t *packet_buf;
         size_t packet_size;
         size_t packet_pos = 0;
+        OBPFrameHeader frame_hdr = {0};
         OBPState state = {0};
         int SeenFrameHeader = 0;
 
@@ -133,6 +135,7 @@ int main(int argc, char *argv[])
             }
             case OBP_OBU_SEQUENCE_HEADER: {
                 seen_seq = 1;
+                memset(&hdr, 0, sizeof(hdr));
                 ret = obp_parse_sequence_header(packet_buf + packet_pos + offset, obu_size, &hdr, &err);
                 if (ret < 0) {
                     free(packet_buf);
@@ -147,7 +150,7 @@ int main(int argc, char *argv[])
                 break;
             }
             case OBP_OBU_FRAME: {
-                OBPFrameHeader frame_hdr = {0};
+                memset(&frame_hdr, 0, sizeof(frame_hdr));
                 if (!seen_seq) {
                     free(packet_buf);
                     printf("Encountered Frame Header OBU before Sequence Header OBU.\n");
@@ -169,7 +172,7 @@ int main(int argc, char *argv[])
             }
             case OBP_OBU_REDUNDANT_FRAME_HEADER:
             case OBP_OBU_FRAME_HEADER: {
-                OBPFrameHeader frame_hdr = {0};
+                memset(&frame_hdr, 0, sizeof(frame_hdr));
                 if (!seen_seq) {
                     free(packet_buf);
                     printf("Encountered Frame Header OBU before Sequence Header OBU.\n");
@@ -201,7 +204,18 @@ int main(int argc, char *argv[])
                 break;
             }
             case OBP_OBU_TILE_GROUP: {
-                SeenFrameHeader = 0; // Remove me after proper implementation.
+                OBPTileGroup tiles = {0};
+                ret = obp_parse_tile_group(packet_buf + packet_pos + offset, obu_size, &frame_hdr, &tiles, &SeenFrameHeader, &err);
+                if (ret < 0) {
+                    free(packet_buf);
+                    printf("Failed to parse tile group: %s\n", err.error);
+                    ret = 1;
+                    goto end;
+                }
+                printf("NumTiles = %"PRIu16" tg_start = %"PRIu16" tg_end = %"PRIu16"\n", tiles.NumTiles, tiles.tg_start, tiles.tg_end);
+                for (uint16_t t = tiles.tg_start; t <= tiles.tg_end; t++) {
+                    printf("    TileSize[%"PRIu16"] = %"PRIu64"\n", t, tiles.TileSize[t]);
+                }
                 break;
             }
             case OBP_OBU_METADATA: {
