@@ -1810,7 +1810,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             }
         }
     }
-    if (AllLossless || fh->allow_intrabc || seq->enable_restoration) {
+    if (AllLossless || fh->allow_intrabc || !seq->enable_restoration) {
         fh->lr_params.lr_type[0] = 0;
         fh->lr_params.lr_type[1] = 0;
         fh->lr_params.lr_type[2] = 0;
@@ -1931,7 +1931,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
     if (FrameIsIntra) {
         /* return */
     } else {
-        for (int ref = 1; ref < 7; ref++) {
+        for (int ref = 1; ref <= 7; ref++) {
             uint8_t type;
             int is_global;
             _obp_br(is_global, br, 1);
