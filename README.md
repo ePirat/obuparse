@@ -15,7 +15,7 @@ as correctly as possible, and to use it everywhere in place of probably subtly-b
 ad-hoc parsers.
 
 I could have ripped out an OBU parser from other projects, but they're all either
-very intertwined with their respective encoder/decoder, written in vert unportable
+very intertwined with their respective encoder/decoder, written in very unportable
 manners, or in non-FFI friendly languages. At the time of writing this, I am not
 aware of any permissively licensed (or otherwise) OBU parsers that actually work
 portably.
@@ -46,6 +46,9 @@ out of being a work in progress.
 * Sequence Header OBU parsing.
 * Metadata OBU parsing.
 * Tile List OBU parsing.
+* Tile Group OBU parsing.
+* Frame Header OBU parsing.
+* Frame OBU parsing.
 
 Tools
 -----
