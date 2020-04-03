@@ -1795,7 +1795,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
         _obp_br(fh->cdef_params.cdef_damping_minus_3, br, 2);
         /* CdefDamping not relevant to OBU parsing. */
         _obp_br(fh->cdef_params.cdef_bits, br, 2);
-        for (int i = 0; i < (i << fh->cdef_params.cdef_bits); i++) {
+        for (int i = 0; i < (1 << fh->cdef_params.cdef_bits); i++) {
             _obp_br(fh->cdef_params.cdef_y_pri_strength[i], br, 4);
             _obp_br(fh->cdef_params.cdef_y_sec_strength[i], br, 2);
             if (fh->cdef_params.cdef_y_sec_strength[i] == 3) {
