@@ -993,11 +993,14 @@ int obp_parse_frame(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq, OBPSt
                     int temporal_id, int spatial_id, OBPFrameHeader *fh, OBPTileGroup *tile_group,
                     int *SeenFrameHeader, OBPError *err)
 {
-    // TODO: Define OBPTileGroup and pals
-    // pos = 0;
-    return obp_parse_frame_header(buf, buf_size, seq, state, temporal_id, spatial_id, fh, SeenFrameHeader, err);
-    // pos = consumed
-    // parse_tile_group(buf_pos,size-pos)
+    size_t startBitPos = 0, endBitPos, headerBytes;
+    int ret = obp_parse_frame_header(buf, buf_size, seq, state, temporal_id, spatial_id, fh, SeenFrameHeader, err);
+    if (ret < 0) {
+        return -1;
+    }
+    endBitPos   = state->frame_header_end_pos;
+    headerBytes = (endBitPos - startBitPos) / 8;
+    return obp_parse_tile_group(buf + headerBytes, buf_size - headerBytes, fh, tile_group, SeenFrameHeader, err);
 }
 
 int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq, OBPState *state,
@@ -2127,6 +2130,11 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
         state->prev = *fh;
         state->prev_filled = 1;
     }
+
+    /* Stash byte position for use in OBU_FRAME parsing. */
+    printf("br->bits_in_buf = %"PRIu8"\n", br->bits_in_buf);
+    _obp_br_byte_alignment(br);
+    state->frame_header_end_pos = _obp_br_get_pos(br);
 
     return 0;
 }

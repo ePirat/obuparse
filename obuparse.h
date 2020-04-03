@@ -500,6 +500,9 @@ typedef struct OBPError {
      OBPFrameHeader prev;
      int prev_filled;
 
+     /* For use only on OBU_FRAME parsing. */
+     size_t frame_header_end_pos;
+
      /* Frame state. */
      OBPFrameType RefFrameType[8];
      uint8_t RefValid[8];
