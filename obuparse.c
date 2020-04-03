@@ -1051,7 +1051,6 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             if (seq->film_grain_params_present) {
                 /* load_grain_params() */
                 fh->film_grain_params = state->RefGrainParams[fh->frame_to_show_map_idx];
-                assert(0);
             }
             return 0;
         }
@@ -1998,7 +1997,7 @@ int obp_parse_frame_header(uint8_t *buf, size_t buf_size, OBPSequenceHeader *seq
             /* return */
         } else {
             _obp_br(fh->film_grain_params.grain_seed, br, 16);
-            if (fh->frame_type == OBP_KEY_FRAME) {
+            if (fh->frame_type == OBP_INTER_FRAME) {
                 _obp_br(fh->film_grain_params.update_grain, br, 1);
             } else {
                 fh->film_grain_params.update_grain = 1;
